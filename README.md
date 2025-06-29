@@ -1,4 +1,5 @@
-# check-in-sample
+# Attendance-system
+
 The folder is front-end sample code 
 
 ex :https://qrcode-generator.tw/

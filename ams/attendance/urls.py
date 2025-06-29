@@ -14,6 +14,9 @@ app_name = 'attendance'
 urlpatterns = [
     path('login/', views.login, name='login'),
     path('logout/', views.logout_user, name='logout'),
+    path('change_password/', views.change_password, name='change_password'),
+    path('forgot_password/', views.forgot_password, name='forgot_password'),
+    path('send-test-email/', views.test_send_email),
 ]
 
 urlpatterns += router.urls

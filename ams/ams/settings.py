@@ -25,7 +25,11 @@ SECRET_KEY = 'django-insecure-v$n8*d2)$=d^y#ir5k)bk2(fo7dfd7(2*a)c7b1$rz(d-%c*m*
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    '127.0.0.1',
+    'localhost',
+    '13.112.197.109', 
+]
 
 
 # Application definition
@@ -39,18 +43,19 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
+    'corsheaders',
     'attendance',
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "corsheaders.middleware.CorsMiddleware",
+    'django.middleware.common.CommonMiddleware',
 ]
 
 ROOT_URLCONF = 'ams.urls'
@@ -83,7 +88,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'ams',
         'USER': 'root',
-        'PASSWORD': 'nvidia',
+        'PASSWORD': '@dmin1234',
         'HOST': '127.0.0.1',
         'PORT': 3306,
     }
@@ -144,8 +149,11 @@ REST_FRAMEWORK = {
 AUTH_USER_MODEL = "attendance.Employees"
 
 CORS_ALLOW_CREDENTIALS = True  # 允許 Cookies 和身份驗證資訊
+
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # 設定允許的前端地址
+    "https://13.112.197.109:5173",
+    "http://localhost:5173",
+    "https://127.0.0.1:5713",
 ]
 
 CORS_ALLOW_HEADERS = [
@@ -153,3 +161,21 @@ CORS_ALLOW_HEADERS = [
     "Content-Type",
     "X-CSRFToken",
 ]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://13.112.197.109:5173",
+    "http://localhost:5173",
+    "https://127.0.0.1:5713"
+]
+
+# console print email for development
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# DEFAULT_FROM_EMAIL = 'noreply@example.com'
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = '<your_email>@gmail.com'
+EMAIL_HOST_PASSWORD = '<your_app_password>'
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
