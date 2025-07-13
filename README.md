@@ -1,10 +1,9 @@
-# check-in-sample
-The folder is front-end sample code 
+# Attendance-system
 
 ex :https://qrcode-generator.tw/
-Generator QR-Code fromat:
+Generator QR-Code format:
 
-{"lat":25.136320394838833,"lng":121.54297453763601}
+25.136320394838833, 121.54297453763601
 
 
 

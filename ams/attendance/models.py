@@ -6,6 +6,7 @@ class Employees(AbstractUser):
     employee_id = models.CharField(verbose_name="員工編號", max_length=20, unique=True, primary_key=True)
     phone = models.TextField(verbose_name="員工電話", blank=True, null=True)
     address = models.TextField(verbose_name="員工地址", blank=True, null=True)
+    email = models.EmailField(verbose_name="員工電子郵件", blank=True, null=True)
 
     # 設定 employee_id 作為唯一識別
     USERNAME_FIELD = 'employee_id'
@@ -20,7 +21,7 @@ class Employees(AbstractUser):
 
 class Companies(models.Model):
     name = models.CharField(verbose_name=("公司名稱"), max_length=50)
-    address = models.TextField(verbose_name=("公司地址"))
+    location = models.TextField(verbose_name=("公司地址"))
     latitude = models.TextField(verbose_name=("公司位置緯度"))
     longitude = models.TextField(verbose_name=("公司位置經度"))
     radius = models.DecimalField(verbose_name=("GPS合法範圍半徑"), max_digits=5, decimal_places=2)

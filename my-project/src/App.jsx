@@ -22,6 +22,27 @@ const App = () => {
   const scanSession = useRef(0);
   const hasScanned = useRef(false);
   const modeRef = useRef("");
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [email, setEmail] = useState("");
+
+
+  function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== "") {
+      const cookies = document.cookie.split(";");
+      for (let cookie of cookies) {
+        cookie = cookie.trim();
+        if (cookie.startsWith(name + "=")) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
+      }
+    }
+    return cookieValue;
+  }
+
+  const csrftoken = getCookie("csrftoken");
 
 
   useEffect(() => {
@@ -50,12 +71,12 @@ const App = () => {
 const handleLogin = async () => {
   try {
     const response = await axios.post("http://localhost:8000/login/", {
-      userId,
-      password,
+      "userId": userId,
+      "password": password,
     }, {
-      headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
+      withCredentials: true,
     });
-    localStorage.setItem("authToken", response.data.token);
     localStorage.setItem("userId", userId);
     sessionStorage.setItem("password", password);
     try {
@@ -100,10 +121,7 @@ const handleLogout = async () => {
       method: method,
       url: url,
       data: record,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Basic ${btoa(`${userId}:${password}`)}`
-      },
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
       withCredentials: true
     });
     if (method === "post" && response.status === 201 || method === "patch" && response.status === 200){
@@ -127,10 +145,15 @@ const handleLogout = async () => {
     try {
       console.log("掃描到的資料:", data);
       const [lat, lng] = data.split(", ").map(Number);
-      !isNaN(lat) && lat >= -90 && lat <= 90
-      !isNaN(lng) && lng >= -180 && lng <= 180;
-      qrData = { lat, lng };
-      console.log("qrData:", typeof(qrData));
+      if (
+        !isNaN(lat) && lat >= -90 && lat <= 90 &&
+        !isNaN(lng) && lng >= -180 && lng <= 180
+      ) {
+        qrData = { lat, lng };
+      } else {
+        console.error("Invalid latitude or longitude:", lat, lng);
+        qrData = null;
+      }
       console.log("Parsed QR Code Data:", qrData);
     } catch {
       toast.error("掃到無效的 QR Code");
@@ -144,7 +167,7 @@ const handleLogout = async () => {
     try {
       const response = await axios.get(`http://localhost:8000/attendance/`, {
         params: { days: 0 },
-        headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
         withCredentials: true,
       });
       return response.data;
@@ -157,7 +180,7 @@ const handleLogout = async () => {
   const getCompanies = async () => {
     try {
       const response = await axios.get(`http://localhost:8000/companies/`, {
-        headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
         withCredentials: true,
       });
       return response.data;
@@ -173,121 +196,129 @@ const handleLogout = async () => {
       return;
     }
 
-    const checkLocation = async () => {
-      const companies = await getCompanies()
-      console.log('companies', JSON.stringify(companies))
-      return companies.some(company => {
-        return company.latitude === qrData.lat.toString() && company.longitude === qrData.lng.toString();
-      });
+  const checkLocation = async () => {
+    const companies = await getCompanies()
+    console.log('companies', JSON.stringify(companies))
+    for (let company of companies) {
+      console.log("company", company.latitude, company.longitude)
+      console.log("qrData", qrData.lat, qrData.lng)
+      if (company.latitude === qrData.lat.toString() && company.longitude === qrData.lng.toString()) {
+        return true;
+      }
     }
+    return false;
+  }
 
-    const distance = getDistance(gps.lat, gps.lng, qrData.lat, qrData.lng);
-    const currentTime = new Date().toLocaleString('zh-TW', { 
-      timeZone: 'Asia/Taipei', 
-      year: 'numeric', 
-      month: '2-digit', 
-      day: '2-digit', 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      second: '2-digit',
-      hour12: false // 24小時制
-    }).replace(',', '').replace(/\//g, '-');
-    console.log("currentTime", currentTime)
-    const formatCurrentTime = currentTime.replace(/(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/, "$3/$1/$2 $4:$5:$6");
-    const today = formatCurrentTime.slice(0, 10)
-    console.log("Distance:", distance);
-    console.log("formatCurrentTime", formatCurrentTime)
-    console.log("today", today)
-    const location = `${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)}`
-    let newRecord = {};
-    let noRecord = false;
-    
-    console.log("checkLocation()", checkLocation())
-    const isLocationValid = await checkLocation()
+  console.log("gps", gps.lat, gps.lng)
+  console.log("qrData", qrData.lat, qrData.lng)
+  const distance = getDistance(gps.lat, gps.lng, qrData.lat, qrData.lng);
+  const currentTime = new Date().toLocaleString('zh-TW', { 
+    timeZone: 'Asia/Taipei', 
+    year: 'numeric', 
+    month: '2-digit', 
+    day: '2-digit', 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit',
+    hour12: false // 24小時制
+  }).replace(',', '').replace(/\//g, '-');
+  console.log("currentTime", currentTime)
+  const formatCurrentTime = currentTime.replace(/(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/, "$3/$1/$2 $4:$5:$6");
+  const today = formatCurrentTime.slice(0, 10)
+  console.log("Distance:", distance);
+  console.log("formatCurrentTime", formatCurrentTime)
+  console.log("today", today)
+  const location = `${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)}`
+  let newRecord = {};
+  let noRecord = false;
+  
 
-    if (distance <= 2000 && isLocationValid) {
-      const todayAttendance = await getTodayAttendance()
-      console.log("todayAttendance:", todayAttendance)
-      console.log("todayAttendance len:", todayAttendance.length)
-      if (modeRef.current === "in" && todayAttendance.length === 0){
-        console.log(modeRef.current)
-        const url = "http://localhost:8000/attendance/"
+  const isLocationValid = await checkLocation()
+  console.log("distance <= 2000", distance <= 2000)
+  console.log("isLocationValid", isLocationValid)
+  if (distance <= 2000 && isLocationValid) {
+    const todayAttendance = await getTodayAttendance()
+    console.log("todayAttendance:", todayAttendance)
+    console.log("todayAttendance len:", todayAttendance.length)
+    if (modeRef.current === "in" && todayAttendance.length === 0){
+      console.log(modeRef.current)
+      const url = "http://localhost:8000/attendance/"
+      newRecord = {
+        relation_id: relationId,
+        date: today,
+        checkin_time: formatCurrentTime,
+        checkout_time: formatCurrentTime,
+        checkin_location: location,
+        checkout_location: location,
+        work_hours: 0
+      };
+      updateAttendance("post", newRecord, url)
+    } else if (modeRef.current === "out" && todayAttendance.length === 1) {
+      console.log(modeRef.current)
+      newRecord = todayAttendance[0]
+      console.log("newRecord", newRecord)
+      if (newRecord) {
+        const id = newRecord.id
+        const checkinTime = newRecord.checkin_time.slice(0, 16).replace('T', ' ');
+        const work_hours = ((new Date(formatCurrentTime) - new Date(checkinTime)) / 3600000).toFixed(2);
+        const url = `http://localhost:8000/attendance/${id}/`
         newRecord = {
-          relation_id: relationId,
           date: today,
-          checkin_time: formatCurrentTime,
           checkout_time: formatCurrentTime,
-          checkin_location: location,
           checkout_location: location,
-          work_hours: 0
+          work_hours: work_hours
         };
-        updateAttendance("post", newRecord, url)
-      } else if (modeRef.current === "out" && todayAttendance.length === 1) {
-        console.log(modeRef.current)
-        newRecord = todayAttendance[0]
-        console.log("newRecord", newRecord)
+        console.log(JSON.stringify(newRecord))
+        updateAttendance("patch", newRecord, url)
+      }
+    } else {
+      console.log("else")
+      newRecord = todayAttendance[-1]
+      if (todayAttendance.length === 0){
+        noRecord = true
+      } else {
         if (newRecord) {
           const id = newRecord.id
-          const checkinTime = newRecord.checkin_time.slice(0, 16).replace('T', ' ');
-          const work_hours = ((new Date(formatCurrentTime) - new Date(checkinTime)) / 3600000).toFixed(2);
           const url = `http://localhost:8000/attendance/${id}/`
           newRecord = {
             date: today,
+            checkin_time: formatCurrentTime,
             checkout_time: formatCurrentTime,
             checkout_location: location,
-            work_hours: work_hours
+            work_hours: 0
           };
           console.log(JSON.stringify(newRecord))
           updateAttendance("patch", newRecord, url)
         }
-      } else {
-        console.log("else")
-        newRecord = todayAttendance[0]
-        if (todayAttendance.length === 0){
-          noRecord = true
-        } else {
-          if (newRecord) {
-            const id = newRecord.id
-            const url = `http://localhost:8000/attendance/${id}/`
-            newRecord = {
-              date: today,
-              checkin_time: formatCurrentTime,
-              checkout_time: formatCurrentTime,
-              checkout_location: location,
-              work_hours: 0
-            };
-            console.log(JSON.stringify(newRecord))
-            updateAttendance("patch", newRecord, url)
-          }
-        }
       }
-      if (noRecord){
-        toast.error("沒有上班打卡紀錄");
-        setShowFail(true);                    // show read x status
-        setTimeout(() => {
-          setShowFail(false);                // Auto clear
-          setScanning(false);                // Return Previous pace
-        }, 2000);
-      } else {
-        setRecords((prev) => [...prev, newRecord]);
-        toast.success("打卡完成，5秒後返回首頁");
-        setShowSuccess(true);
-        setTimeout(() => {
-          setShowSuccess(false);
-          setScanning(false);
-          setPage("dashboard");
-          hasScanned.current = false;
-        }, 5000);
-      }
-    } else {
-      toast.error("你不在正確位置打卡");
+    }
+    if (noRecord){
+      toast.error("沒有上班打卡紀錄");
       setShowFail(true);                    // show read x status
       setTimeout(() => {
         setShowFail(false);                // Auto clear
         setScanning(false);                // Return Previous pace
       }, 2000);
+    } else {
+      setRecords((prev) => [...prev, newRecord]);
+      toast.success("打卡完成，5秒後返回首頁");
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        setScanning(false);
+        setPage("dashboard");
+        hasScanned.current = false;
+      }, 5000);
     }
-  };
+  } else {
+    toast.error("你不在正確位置打卡");
+    setShowFail(true);                    // show read x status
+    setTimeout(() => {
+      setShowFail(false);                // Auto clear
+      setScanning(false);                // Return Previous pace
+    }, 2000);
+  }
+};
 
   const simulateScan = () => {
     const simulatedData = "24.99132303960377, 121.51194818378671"
@@ -310,7 +341,7 @@ const handleLogout = async () => {
     const handEmployee = async () => {
       try {
         const response = await axios.get(`http://localhost:8000/employees/${userId}/`, {
-          headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
           withCredentials: true,
         });
         const data = response.data;
@@ -332,7 +363,7 @@ const handleLogout = async () => {
     try {
       const response = await axios.get(`http://localhost:8000/relation/`, {
         params: { employee_id: userId},
-        headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
         withCredentials: true,
       });
       console.log("handleRelationTable API 回應:", response.data);
@@ -345,6 +376,7 @@ const handleLogout = async () => {
   };
 
   const submitLeave = async () => {
+    console.log('Authorization:', `Basic ${btoa(`${userId}:${password}`)}`);
     if (!leaveForm.date || !leaveForm.duration || !leaveForm.reason) {
       toast.error("請填寫完整請假資料");
       return;
@@ -391,9 +423,11 @@ const handleLogout = async () => {
       setRecords(prev => [...prev, leave]);
       setLeaveForm({ date: "", duration: "Full Day", reason: "" });
       const response = await axios.post('http://localhost:8000/leave/', leave, 
-        {headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
-        withCredentials: true,
-      });
+        {
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
+          withCredentials: true,
+        }
+      );
       if (response.status === 201){
         toast.success("請假成功！");
       } else {
@@ -422,7 +456,7 @@ const handleLogout = async () => {
     try {
       const response = await axios.get(`http://localhost:8000/attendance/`, {
         params: { employee_id: userId, days: day },
-        headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
         withCredentials: true,
       });
       console.log("API 回應:", response.data);
@@ -439,7 +473,7 @@ const handleLogout = async () => {
         try { 
           const response = await axios.get(`http://localhost:8000/leave/`, {
             params: { employee_id: userId, days: 3 },
-            headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${userId}:${password}`)}` },
+            headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
             withCredentials: true,
           });
           console.log("handleLeave API 回應:", response.data);
@@ -464,15 +498,65 @@ const handleLogout = async () => {
     }
   }, [page, userId, password]);
 
+  const changePassword = async () => {
+    if (!oldPassword || !newPassword) {
+      toast.error("請填寫密碼");
+      return;
+    }
+    try {
+      console.log('oldPassword:', `${oldPassword}`);
+      console.log('newPassword:', `${newPassword}`);
+
+      const response = await axios.post(`http://localhost:8000/change_password/`, {
+        old_password: oldPassword,
+        new_password: newPassword,
+        }, {
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
+          withCredentials: true
+        });
+      if (response.status === 200){
+        toast.success("變更密碼成功！");
+        setOldPassword("");
+        setNewPassword("");
+      } else {
+        toast.error("變更密碼失敗！");
+      }
+    } catch (error) {
+      console.error("變更密碼執行失敗:", error);
+      toast.error("變更密碼執行失敗");
+    }
+    setPage("dashboard");
+  };
+
+  const forgotPassword = async () => {
+    if (!email) {
+      toast.error("請輸入Email");
+      return;
+    }
+    try {
+      const response = await axios.post(`http://localhost:8000/forgot_password/`, { email });
+      if (response.status === 200){
+        toast.success("臨時密碼已寄出");
+      } else {
+        toast.error("送出失敗，請稍後再試");
+      }
+    } catch (error) {
+      console.error("變更密碼執行失敗:", error);
+      toast.error("變更密碼執行失敗");
+    }
+    setEmail("");
+    setPage("login");
+  };
 
   if (page === "login") {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-blue-50 p-4">
         <h1 className="text-3xl font-bold mb-6 text-blue-700">宏全打卡系統</h1>
         <div className="bg-white p-8 rounded-2xl shadow-xl w-80">
-          <input type="text" placeholder="Enter your employee ID" value={userId} onChange={(e) => setUserId(e.target.value)} className="border p-2 mb-4 w-full rounded" />
-          <input type="password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} className="border p-2 mb-6 w-full rounded" />
-          <button onClick={handleLogin} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">Sign In</button>
+          <input type="text" placeholder="請輸入員工編號" value={userId} onChange={(e) => setUserId(e.target.value)} className="border p-2 mb-4 w-full rounded" />
+          <input type="password" placeholder="請輸入密碼" value={password} onChange={(e) => setPassword(e.target.value)} className="border p-2 mb-6 w-full rounded" />
+          <button onClick={handleLogin} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">登入</button>
+          <button onClick={() => setPage("forgot-password")} className="mt-3 text-sm text-blue-600">忘記密碼？</button>
           <div className="text-xs text-gray-400 mt-4">
             {gps ? (<p>Your Current Location<br />{gps.lat.toFixed(4)}, {gps.lng.toFixed(4)}</p>) : (<p>Locating...</p>)}
           </div>
@@ -519,7 +603,7 @@ const handleLogout = async () => {
     return (
       <div className="min-h-screen p-4 bg-blue-50">
         <h1 className="text-2xl font-bold mb-4">請假</h1>
-        <input type="date" value={leaveForm.date} onChange={(e) => setLeaveForm({ ...leaveForm, date: e.target.value })} className="border p-2 mb-4 w-full rounded" />
+        <input type="date" value={leaveForm.date} onChange={(e) => setLeaveForm({ ...leaveForm, date: e.target.value })} className="border p-2 mb-4 w-full rounded"/>
         <select value={leaveForm.duration} onChange={(e) => setLeaveForm({ ...leaveForm, duration: e.target.value })} className="border p-2 mb-4 w-full rounded">
           <option>整天</option>
           <option>早上</option>
@@ -531,6 +615,43 @@ const handleLogout = async () => {
       </div>
     );
   }
+
+  if (page === "change-password") {
+    return (
+      <div className="min-h-screen p-4 bg-blue-50">
+        <h1 className="text-2xl font-bold mb-4">變更密碼</h1>
+        <input type="password" placeholder="請輸入舊密碼" value={oldPassword} onChange={e => setOldPassword(e.target.value)}
+        className="border p-2 mb-4 w-full rounded"/>
+        <input type="password" placeholder="請輸入新密碼" value={newPassword} onChange={e => setNewPassword(e.target.value)}
+        className="border p-2 mb-4 w-full rounded"/>
+        <button onClick={changePassword} className="bg-blue-600 text-white px-4 py-2 rounded w-full">送出</button>
+        <button onClick={() => setPage("dashboard")} className="text-blue-600 mt-4 block w-full">返回</button>
+      </div>
+    );
+  }
+
+  if (page === "forgot-password") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-yellow-50 p-4">
+        <h1 className="text-2xl font-bold mb-4 text-yellow-700">忘記密碼</h1>
+        <div className="bg-white p-6 rounded-2xl shadow-xl w-80">
+          <input
+            type="email"
+            placeholder="請輸入註冊 Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="border p-2 mb-4 w-full rounded"
+          />
+          <button onClick={forgotPassword} className="bg-yellow-600 text-white px-4 py-2 rounded w-full hover:bg-yellow-700">
+            寄送臨時密碼
+          </button>
+          <button onClick={() => setPage("login")} className="text-yellow-600 mt-4 block w-full text-sm">返回登入頁</button>
+        </div>
+      </div>
+    )
+  }
+
 
   if (page === "view-records") {
     return (
@@ -597,24 +718,22 @@ const handleLogout = async () => {
 
   return (
     <div className="min-h-screen bg-blue-50 p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold text-blue-700">Geo Clock-In Buddy</h1>
+      <h1 className="text-2xl font-bold text-blue-700 text-center mb-4">考勤系統</h1>
+      <div className="flex space-x-2 mb-4">
+        <button onClick={() => setPage("change-password")} className="text-blue-600 ml-auto">變更密碼</button>
         <button onClick={handleLogout} className="text-blue-600">登出</button>
       </div>
-
       <div className="bg-white rounded-2xl shadow p-6 mb-6">
-        <h2 className="text-xl font-semibold text-gray-700 mb-2">考勤系統</h2>
         <p className="text-gray-500 mb-4">{new Date().toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         <div className="text-xl font-semibold text-gray-500 mb-2">員工姓名: {employeeData.name}</div>
         <div className="text-xl font-semibold text-gray-500 mb-2">員工工號: {userId}</div>
-        <div className="flex space-x-4 mb-6">
-          <button onClick={() => startScan("in")} className="bg-green-500 text-white px-4 py-2 rounded">上班打卡</button>
-          <button onClick={() => startScan("out")} className="bg-red-500 text-white px-4 py-2 rounded">下班打卡</button>
+        <div className="flex space-x-4 my-6">
+          <button onClick={() => startScan("in")} className="flex-1 bg-green-500 text-white px-4 py-2 rounded">上班打卡</button>
+          <button onClick={() => startScan("out")} className="flex-1 bg-red-500 text-white px-4 py-2 rounded">下班打卡</button>
         </div>
-
         <div className="flex space-x-4">
           <button onClick={() => setPage("apply-leave")} className="flex-1 bg-gray-200 py-2 rounded">請假</button>
-          <button onClick={() => setPage("view-records")} className="flex-1 bg-gray-200 py-2 rounded">查看紀錄</button>
+          <button onClick={() => setPage("view-records")} className="flex-1 bg-gray-200 py-2 rounded">查看出勤紀錄</button>
         </div>
       </div>
     </div>

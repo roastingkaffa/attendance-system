@@ -1,0 +1,15 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+    <h2>請選擇日期區間</h2>
+    <form method="post">{% csrf_token %}
+        {{ form.as_p }}
+        <input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="select_across" value="0" />
+        {% for obj in queryset %}
+        <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
+        {% endfor %}
+        <button type="submit" name="apply" class="default">匯出</button>
+        <a href="{{ request.META.HTTP_REFERER }}">取消</a>
+    </form>
+{% endblock %}
