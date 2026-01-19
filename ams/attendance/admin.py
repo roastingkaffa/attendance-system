@@ -3,7 +3,11 @@ from django.http import HttpResponse
 from django import forms
 from django.shortcuts import render
 import openpyxl
-from .models import *
+from .models import (
+    Employees, Companies, EmpCompanyRel, LeaveRecords,
+    AttendanceRecords, ApprovalRecords, LeaveBalances,
+    ManagerialRelationship, ApprovalPolicy
+)
 
 class DateRangeForm(forms.Form):
     start_date = forms.DateField(label="起始日期", widget=forms.DateInput(attrs={'type': 'date'}))
@@ -19,13 +23,13 @@ class EmployeesAdmin(admin.ModelAdmin):
 
 @admin.register(Companies)
 class CompaniesAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'location', 'latitude', 'longitude', 'radius')
+    list_display = ('id', 'name', 'address', 'latitude', 'longitude', 'radius')
 
 
 @admin.register(EmpCompanyRel)
 class CEmpCompanyRelAdmin(admin.ModelAdmin):
     list_display = ('id', 'employee_id_display', 'employee_name_display',
-        'company_id_display', 'company_name_display', 'employment_status', 'hire_date', 'leave_date'
+        'company_id_display', 'company_name_display', 'direct_manager', 'employment_status', 'hire_date', 'leave_date'
     )
 
     def employee_id_display(self, obj):
@@ -66,7 +70,10 @@ class LeaveRecordsAdmin(admin.ModelAdmin):
     employee_name_display.short_description = '員工姓名'
 
     def company_name_display(self, obj):
-        return obj.relation_id.company_id.name
+        try:
+            return obj.relation_id.company_id.name
+        except Exception as e:
+            return f"錯誤: {str(e)}"
     company_name_display.short_description = '公司名稱'
 
 
@@ -122,6 +129,63 @@ class LeaveRecordsAdmin(admin.ModelAdmin):
             'action': 'export_by_date_range'
         })
 
+@admin.register(ApprovalRecords)
+class ApprovalRecordsAdmin(admin.ModelAdmin):
+    list_display = ('id', 'leave_id', 'approver_id', 'approval_level', 'status', 'created_at', 'approved_at')
+    list_filter = ('status', 'approval_level')
+    search_fields = ['leave_id__relation_id__employee_id__username', 'approver_id__username']
+
+    def save_model(self, request, obj, form, change):
+        """覆寫 save_model，當審批狀態改變時同步更新請假記錄"""
+        super().save_model(request, obj, form, change)
+
+        # 如果審批通過
+        if obj.status == 'approved':
+            leave = obj.leave_id
+            # 檢查是否還有其他待審批的記錄
+            pending_count = ApprovalRecords.objects.filter(
+                leave_id=leave,
+                status='pending'
+            ).exclude(id=obj.id).count()
+
+            # 如果沒有待審批，更新請假狀態並扣除額度
+            if pending_count == 0 and leave.status == 'pending':
+                leave.status = 'approved'
+                leave.save()
+
+                # 扣除假別額度
+                from attendance.models import LeaveBalances
+                employee = leave.relation_id.employee_id
+                year = leave.start_time.year
+                balance = LeaveBalances.objects.filter(
+                    employee_id=employee,
+                    year=year,
+                    leave_type=leave.leave_type
+                ).first()
+                if balance:
+                    balance.used_hours += leave.leave_hours
+                    balance.save()
+
+        # 如果審批拒絕
+        elif obj.status == 'rejected':
+            leave = obj.leave_id
+            leave.status = 'rejected'
+            leave.save()
+
+@admin.register(LeaveBalances)
+class LeaveBalancesAdmin(admin.ModelAdmin):
+    list_display = ('id', 'employee_name_display', 'year', 'leave_type_display', 'total_hours', 'used_hours', 'remaining_hours')
+    list_filter = ('year', 'leave_type')
+    search_fields = ['employee_id__username', 'employee_id__employee_id']
+
+    def employee_name_display(self, obj):
+        return f"{obj.employee_id.username} ({obj.employee_id.employee_id})"
+    employee_name_display.short_description = '員工'
+
+    def leave_type_display(self, obj):
+        return obj.get_leave_type_display()
+    leave_type_display.short_description = '假別'
+
 @admin.register(AttendanceRecords)
 class AttendanceRecordsAdmin(admin.ModelAdmin):
     list_display = ('relation_id_display', 'employee_code_display', 'user_name',
@@ -141,7 +205,10 @@ class AttendanceRecordsAdmin(admin.ModelAdmin):
     relation_id_display.short_description = '關聯編號'
 
     def company_name(self, obj):
-        return obj.relation_id.company_id.name
+        try:
+            return obj.relation_id.company_id.name
+        except Exception as e:
+            return f"錯誤: {str(e)}"
     company_name.short_description = '公司名稱'
 
 
@@ -227,4 +294,122 @@ class AttendanceRecordsAdmin(admin.ModelAdmin):
             'action': 'export_attendance_and_leave'
         })
 
+
+
+# ========== 審批管理系統 Admin ==========
+
+@admin.register(ManagerialRelationship)
+class ManagerialRelationshipAdmin(admin.ModelAdmin):
+    list_display = ('id', 'employee_display', 'manager_display', 'company_id', 'effective_date', 'end_date', 'created_by')
+    list_filter = ('company_id', 'effective_date')
+    search_fields = ['employee_id__employee_id', 'employee_id__username', 'manager_id__employee_id', 'manager_id__username']
+    date_hierarchy = 'effective_date'
+
+    def employee_display(self, obj):
+        return f"{obj.employee_id.username} ({obj.employee_id.employee_id})"
+    employee_display.short_description = '員工'
+
+    def manager_display(self, obj):
+        return f"{obj.manager_id.username} ({obj.manager_id.employee_id})"
+    manager_display.short_description = '直屬主管'
+
+    def has_add_permission(self, request):
+        """只有 HR 和總經理可以新增"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def has_change_permission(self, request, obj=None):
+        """只有 HR 和總經理可以修改"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def has_delete_permission(self, request, obj=None):
+        """只有 HR 和總經理可以刪除"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def save_model(self, request, obj, form, change):
+        """記錄建立者"""
+        if not change:  # 新增時
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+        # 同步更新 EmpCompanyRel 的 direct_manager
+        try:
+            rel = EmpCompanyRel.objects.filter(
+                employee_id=obj.employee_id,
+                company_id=obj.company_id
+            ).first()
+            if rel:
+                rel.direct_manager = obj.manager_id
+                rel.save()
+        except Exception as e:
+            print(f"同步主管關係錯誤: {str(e)}")
+
+
+@admin.register(ApprovalPolicy)
+class ApprovalPolicyAdmin(admin.ModelAdmin):
+    list_display = ('id', 'policy_name', 'company_id', 'min_days', 'max_days', 'is_active', 'created_at')
+    list_filter = ('is_active', 'company_id')
+    search_fields = ['policy_name']
+    
+    fieldsets = (
+        ('基本資訊', {
+            'fields': ('policy_name', 'company_id', 'is_active')
+        }),
+        ('天數範圍', {
+            'fields': ('min_days', 'max_days'),
+            'description': '定義此政策適用的請假天數範圍'
+        }),
+        ('審批層級', {
+            'fields': ('approval_levels',),
+            'description': '''
+            JSON 格式範例：
+            [
+                {"level": 1, "role": "manager", "description": "直屬主管"},
+                {"level": 2, "role": "hr", "description": "人資部門"},
+                {"level": 3, "role": "ceo", "description": "總經理"}
+            ]
+            
+            role 可選值：
+            - manager: 直屬主管（自動取得）
+            - hr: 人資部門（employee_id 以 HR 開頭）
+            - ceo: 總經理（employee_id 以 CEO 開頭）
+            - custom: 自訂（需要額外處理）
+            '''
+        }),
+    )
+
+    def has_add_permission(self, request):
+        """只有 HR 和總經理可以新增"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def has_change_permission(self, request, obj=None):
+        """只有 HR 和總經理可以修改"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def has_delete_permission(self, request, obj=None):
+        """只有 HR 和總經理可以刪除"""
+        if request.user.is_superuser:
+            return True
+        emp_id = getattr(request.user, 'employee_id', '')
+        return emp_id.startswith('HR') or emp_id.startswith('CEO')
+
+    def save_model(self, request, obj, form, change):
+        """記錄建立者"""
+        if not change:  # 新增時
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 

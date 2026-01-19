@@ -1,0 +1,229 @@
+{
+  "summary": {
+    "total": 42,
+    "passed": 40,
+    "failed": 0,
+    "warnings": 2,
+    "pass_rate": "95.2%",
+    "duration": "0.06s",
+    "start_time": "2025-11-22T16:23:31.257192",
+    "end_time": "2025-11-22T16:23:31.318475"
+  },
+  "results": {
+    "pass": [
+      {
+        "category": "資料庫完整性",
+        "test": "Employees 資料表",
+        "message": "4 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "Companies 資料表",
+        "message": "1 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "EmpCompanyRel 資料表",
+        "message": "4 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "LeaveRecords 資料表",
+        "message": "2 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "ApprovalRecords 資料表",
+        "message": "2 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "LeaveBalances 資料表",
+        "message": "12 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "ManagerialRelationship 資料表",
+        "message": "1 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "ApprovalPolicy 資料表",
+        "message": "3 筆資料"
+      },
+      {
+        "category": "資料庫完整性",
+        "test": "AttendanceRecords 資料表",
+        "message": "0 筆資料"
+      },
+      {
+        "category": "員工資料",
+        "test": "員工數量",
+        "message": "共 4 名員工"
+      },
+      {
+        "category": "員工資料",
+        "test": "EMP 角色存在",
+        "message": "1 名"
+      },
+      {
+        "category": "員工資料",
+        "test": "MGR 角色存在",
+        "message": "1 名"
+      },
+      {
+        "category": "員工資料",
+        "test": "HR 角色存在",
+        "message": "1 名"
+      },
+      {
+        "category": "員工資料",
+        "test": "CEO 角色存在",
+        "message": "1 名"
+      },
+      {
+        "category": "公司資料",
+        "test": "公司數量",
+        "message": "共 1 間公司"
+      },
+      {
+        "category": "公司資料",
+        "test": "宏全國際 GPS 座標",
+        "message": "(25.033408, 121.564099)"
+      },
+      {
+        "category": "公司資料",
+        "test": "宏全國際 打卡範圍",
+        "message": "100.0 公尺"
+      },
+      {
+        "category": "關聯資料",
+        "test": "EmpCompanyRel",
+        "message": "4 筆關聯"
+      },
+      {
+        "category": "關聯資料",
+        "test": "EMP001 的主管",
+        "message": "MGR001"
+      },
+      {
+        "category": "關聯資料",
+        "test": "ManagerialRelationship",
+        "message": "1 筆關係"
+      },
+      {
+        "category": "關聯資料",
+        "test": "主管關係正常",
+        "message": "張小明 → 王經理"
+      },
+      {
+        "category": "請假記錄",
+        "test": "記錄數量",
+        "message": "2 筆"
+      },
+      {
+        "category": "請假記錄",
+        "test": "狀態 approved",
+        "message": "2 筆"
+      },
+      {
+        "category": "審批系統",
+        "test": "審批政策",
+        "message": "3 筆"
+      },
+      {
+        "category": "審批系統",
+        "test": "政策 1 天以內請假",
+        "message": "1 層審批"
+      },
+      {
+        "category": "審批系統",
+        "test": "政策 2-3 天請假",
+        "message": "2 層審批"
+      },
+      {
+        "category": "審批系統",
+        "test": "政策 4 天以上請假",
+        "message": "3 層審批"
+      },
+      {
+        "category": "審批系統",
+        "test": "1天請假政策存在",
+        "message": ""
+      },
+      {
+        "category": "審批系統",
+        "test": "2-3天請假政策存在",
+        "message": ""
+      },
+      {
+        "category": "審批系統",
+        "test": "4天以上請假政策存在",
+        "message": ""
+      },
+      {
+        "category": "審批系統",
+        "test": "審批記錄",
+        "message": "2 筆"
+      },
+      {
+        "category": "審批系統",
+        "test": "審批狀態 approved",
+        "message": "2 筆"
+      },
+      {
+        "category": "假別額度",
+        "test": "額度記錄",
+        "message": "12 筆"
+      },
+      {
+        "category": "假別額度",
+        "test": "額度計算正確",
+        "message": "檢查 12 筆"
+      },
+      {
+        "category": "假別額度",
+        "test": "員工 EMP001",
+        "message": "3 種假別, 總額 432.00h, 已用 16.00h, 剩餘 416.00h"
+      },
+      {
+        "category": "假別額度",
+        "test": "員工 MGR001",
+        "message": "3 種假別, 總額 432.00h, 已用 0.00h, 剩餘 432.00h"
+      },
+      {
+        "category": "假別額度",
+        "test": "員工 HR001",
+        "message": "3 種假別, 總額 432.00h, 已用 0.00h, 剩餘 432.00h"
+      },
+      {
+        "category": "假別額度",
+        "test": "員工 CEO001",
+        "message": "3 種假別, 總額 432.00h, 已用 0.00h, 剩餘 432.00h"
+      },
+      {
+        "category": "資料完整性",
+        "test": "審批與請假記錄關聯",
+        "message": "檢查 2 筆"
+      },
+      {
+        "category": "資料完整性",
+        "test": "假別額度扣除",
+        "message": "檢查 2 筆已批准請假"
+      }
+    ],
+    "fail": [],
+    "warning": [
+      {
+        "category": "請假記錄",
+        "test": "請假 #2 時數可能不準確",
+        "message": "記錄: 8.00h, 計算: 9.00h"
+      },
+      {
+        "category": "請假記錄",
+        "test": "請假 #1 時數可能不準確",
+        "message": "記錄: 8.00h, 計算: 9.00h"
+      }
+    ]
+  }
+}

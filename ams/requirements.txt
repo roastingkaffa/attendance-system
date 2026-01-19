@@ -1,0 +1,16 @@
+# Django 核心（Python 3.8 相容版本）
+Django==4.2.16
+djangorestframework==3.14.0
+
+# 資料庫（使用 PyMySQL 替代 mysqlclient，不需要系統套件）
+PyMySQL==1.1.0
+cryptography==41.0.7
+
+# CORS 支援
+django-cors-headers==4.3.1
+
+# 環境變數管理
+python-dotenv==1.0.1
+
+# 密碼加密
+bcrypt==4.1.2

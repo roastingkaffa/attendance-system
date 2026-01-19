@@ -1,741 +1,528 @@
-
-import React, { useState, useEffect, useRef } from "react";
-import { toast } from "sonner";
-import QRCamera from "./QRCamera";
-import axios from "axios";
+/**
+ * App.jsx - 主應用程式元件（重構版）
+ * 從 744 行重構至 < 200 行
+ * 使用 Context API 和元件化設計
+ */
+import React, { useState, useEffect } from 'react';
+import { toast, Toaster } from 'sonner';
+import { useAuth } from './contexts/AuthContext';
+import LoginForm from './components/auth/LoginForm';
+import ChangePasswordForm from './components/auth/ChangePasswordForm';
+import Button from './components/common/Button';
+import Loading from './components/common/Loading';
+import QRCamera from './QRCamera';
+import attendanceService from './services/attendanceService';
+import authService from './services/authService';
+// Phase 2 Week 4: 請假與審批元件
+import LeaveForm from './components/leave/LeaveForm';
+import LeaveList from './components/leave/LeaveList';
+import LeaveBalanceCard from './components/leave/LeaveBalanceCard';
+import ApprovalList from './components/approval/ApprovalList';
+import leaveService from './services/leaveService';
+import './App.css';
 
 const App = () => {
-  const [page, setPage] = useState(localStorage.getItem("loggedIn") ? "dashboard" : "login");
-  const [userId, setUserId] = useState(localStorage.getItem("userId") || "");
-  const [password, setPassword] = useState("");
+  const { isAuthenticated, userId, relationId, logout, forgotPassword } = useAuth();
+
+  // 頁面狀態
+  const [page, setPage] = useState(isAuthenticated ? 'dashboard' : 'login');
+
+  // GPS 狀態
   const [gps, setGps] = useState(null);
-  const [records, setRecords] = useState([]);
-  const [leaveForm, setLeaveForm] = useState({ date: "", duration: "Full Day", reason: "" });
+
+  // 打卡相關狀態
   const [scanning, setScanning] = useState(false);
-  const [countdown] = useState(null);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [showFail, setShowFail] = useState(false); // Show Failed status
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [leaveRecords, setLeaveRecords] = useState([]);
-  const [employeeData, setEmployeeData] = useState({ name: "", id: "" })
-  const [relationId, setRelationId] = useState("");
-  const scanSession = useRef(0);
-  const hasScanned = useRef(false);
-  const modeRef = useRef("");
-  const [oldPassword, setOldPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [email, setEmail] = useState("");
 
+  // Phase 2 Week 4: 請假管理狀態
+  const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [leaveBalances, setLeaveBalances] = useState([]);
+  const [showReportModal, setShowReportModal] = useState(false);
 
-  function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== "") {
-      const cookies = document.cookie.split(";");
-      for (let cookie of cookies) {
-        cookie = cookie.trim();
-        if (cookie.startsWith(name + "=")) {
-          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-          break;
-        }
-      }
-    }
-    return cookieValue;
-  }
+  // 忘記密碼表單
+  const [email, setEmail] = useState('');
 
-  const csrftoken = getCookie("csrftoken");
-
-
+  // 初始化：取得 GPS 位置
   useEffect(() => {
     getLocation();
-    const savedRecords = localStorage.getItem("records");
-    if (savedRecords) {
-      setRecords(JSON.parse(savedRecords));
-    }
   }, []);
 
+  // 登入成功後載入資料
   useEffect(() => {
-    localStorage.setItem("records", JSON.stringify(records));
-  }, [records]);
+    if (isAuthenticated && page === 'dashboard') {
+      fetchAttendanceRecords();
+      fetchLeaveRecords();
+      fetchLeaveBalances();
+    }
+  }, [isAuthenticated, page, userId]);
 
+  /**
+   * 取得 GPS 位置
+   */
   const getLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => setGps({ lat: position.coords.latitude, lng: position.coords.longitude }),
-        () => toast.error("無法取得 GPS 位置，請確認定位權限已開啟")
-      );
-    } else {
-      toast.error("您的瀏覽器不支援定位功能");
-    }
-  };
-
-const handleLogin = async () => {
-  try {
-    const response = await axios.post("http://localhost:8000/login/", {
-      "userId": userId,
-      "password": password,
-    }, {
-      headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-      withCredentials: true,
-    });
-    localStorage.setItem("userId", userId);
-    sessionStorage.setItem("password", password);
-    try {
-      const relationResponse = await handleRelationTable(userId);
-      setRelationId(relationResponse[0]?.id);
-    } catch (error) {
-      console.error("獲取 relationId 時出錯:", error);
-      toast.error("獲取 relationId 失敗");
-    }
-    if (response.status === 200) {
-      setPage("dashboard");
-      toast.success(response.data.message);
-    } else {
-      toast.error(response.data.message);
-    }
-  } catch (error) {
-    console.error("登入失敗，請檢查帳號密碼", error);
-    toast.error("登入失敗，請檢查帳號密碼");
-  }
-};
-
-const handleLogout = async () => {
-  try {
-    const response = await axios.post("http://localhost:8000/logout/");
-    if (response.status === 200) {
-      localStorage.removeItem("loggedIn");
-      localStorage.removeItem("userId");
-      setPage("login");
-      setUserId("");
-      setPassword("");
-      setGps(null);
-      toast.success("登出成功");
-    }
-  } catch (error) {
-    console.error("登出失敗:", error);
-    toast.error("登出失敗");
-  }
-};
-
-  const updateAttendance = async (method, record, url) => {
-    const response = await axios({
-      method: method,
-      url: url,
-      data: record,
-      headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-      withCredentials: true
-    });
-    if (method === "post" && response.status === 201 || method === "patch" && response.status === 200){
-      toast.success("打卡成功！");
-    } else {
-      toast.error("打卡失敗！");
-    }
-  }
-
-  const startScan = (selectedMode) => {
-    hasScanned.current = false;
-    modeRef.current = selectedMode;
-    scanSession.current += 1;
-    setScanning(true);
-  };
-
-  const handleScan = (data) => {
-    if (hasScanned.current || !data) return;
-    hasScanned.current = true;
-    let qrData = "";
-    try {
-      console.log("掃描到的資料:", data);
-      const [lat, lng] = data.split(", ").map(Number);
-      if (
-        !isNaN(lat) && lat >= -90 && lat <= 90 &&
-        !isNaN(lng) && lng >= -180 && lng <= 180
-      ) {
-        qrData = { lat, lng };
-      } else {
-        console.error("Invalid latitude or longitude:", lat, lng);
-        qrData = null;
-      }
-      console.log("Parsed QR Code Data:", qrData);
-    } catch {
-      toast.error("掃到無效的 QR Code");
-      setScanning(false);
-      hasScanned.current = false;
-    }
-    verifyLocation(qrData);
-  };
-
-  const getTodayAttendance = async () => {
-    try {
-      const response = await axios.get(`http://localhost:8000/attendance/`, {
-        params: { days: 0 },
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-        withCredentials: true,
-      });
-      return response.data;
-    } catch (err) {
-      console.error("取得出勤資料錯誤:", err);
-      return [];
-    }
-  }
-
-  const getCompanies = async () => {
-    try {
-      const response = await axios.get(`http://localhost:8000/companies/`, {
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-        withCredentials: true,
-      });
-      return response.data;
-    } catch (err) {
-      console.error("取得出勤資料錯誤:", err);
-      return [];
-    }
-  }
-
-  const verifyLocation = async (qrData) => {
-    if (!gps) {
-      toast.error("尚未取得目前 GPS 位置");
-      return;
-    }
-
-  const checkLocation = async () => {
-    const companies = await getCompanies()
-    console.log('companies', JSON.stringify(companies))
-    for (let company of companies) {
-      console.log("company", company.latitude, company.longitude)
-      console.log("qrData", qrData.lat, qrData.lng)
-      if (company.latitude === qrData.lat.toString() && company.longitude === qrData.lng.toString()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  console.log("gps", gps.lat, gps.lng)
-  console.log("qrData", qrData.lat, qrData.lng)
-  const distance = getDistance(gps.lat, gps.lng, qrData.lat, qrData.lng);
-  const currentTime = new Date().toLocaleString('zh-TW', { 
-    timeZone: 'Asia/Taipei', 
-    year: 'numeric', 
-    month: '2-digit', 
-    day: '2-digit', 
-    hour: '2-digit', 
-    minute: '2-digit', 
-    second: '2-digit',
-    hour12: false // 24小時制
-  }).replace(',', '').replace(/\//g, '-');
-  console.log("currentTime", currentTime)
-  const formatCurrentTime = currentTime.replace(/(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/, "$3/$1/$2 $4:$5:$6");
-  const today = formatCurrentTime.slice(0, 10)
-  console.log("Distance:", distance);
-  console.log("formatCurrentTime", formatCurrentTime)
-  console.log("today", today)
-  const location = `${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)}`
-  let newRecord = {};
-  let noRecord = false;
-  
-
-  const isLocationValid = await checkLocation()
-  console.log("distance <= 2000", distance <= 2000)
-  console.log("isLocationValid", isLocationValid)
-  if (distance <= 2000 && isLocationValid) {
-    const todayAttendance = await getTodayAttendance()
-    console.log("todayAttendance:", todayAttendance)
-    console.log("todayAttendance len:", todayAttendance.length)
-    if (modeRef.current === "in" && todayAttendance.length === 0){
-      console.log(modeRef.current)
-      const url = "http://localhost:8000/attendance/"
-      newRecord = {
-        relation_id: relationId,
-        date: today,
-        checkin_time: formatCurrentTime,
-        checkout_time: formatCurrentTime,
-        checkin_location: location,
-        checkout_location: location,
-        work_hours: 0
-      };
-      updateAttendance("post", newRecord, url)
-    } else if (modeRef.current === "out" && todayAttendance.length === 1) {
-      console.log(modeRef.current)
-      newRecord = todayAttendance[0]
-      console.log("newRecord", newRecord)
-      if (newRecord) {
-        const id = newRecord.id
-        const checkinTime = newRecord.checkin_time.slice(0, 16).replace('T', ' ');
-        const work_hours = ((new Date(formatCurrentTime) - new Date(checkinTime)) / 3600000).toFixed(2);
-        const url = `http://localhost:8000/attendance/${id}/`
-        newRecord = {
-          date: today,
-          checkout_time: formatCurrentTime,
-          checkout_location: location,
-          work_hours: work_hours
-        };
-        console.log(JSON.stringify(newRecord))
-        updateAttendance("patch", newRecord, url)
-      }
-    } else {
-      console.log("else")
-      newRecord = todayAttendance[-1]
-      if (todayAttendance.length === 0){
-        noRecord = true
-      } else {
-        if (newRecord) {
-          const id = newRecord.id
-          const url = `http://localhost:8000/attendance/${id}/`
-          newRecord = {
-            date: today,
-            checkin_time: formatCurrentTime,
-            checkout_time: formatCurrentTime,
-            checkout_location: location,
-            work_hours: 0
-          };
-          console.log(JSON.stringify(newRecord))
-          updateAttendance("patch", newRecord, url)
-        }
-      }
-    }
-    if (noRecord){
-      toast.error("沒有上班打卡紀錄");
-      setShowFail(true);                    // show read x status
-      setTimeout(() => {
-        setShowFail(false);                // Auto clear
-        setScanning(false);                // Return Previous pace
-      }, 2000);
-    } else {
-      setRecords((prev) => [...prev, newRecord]);
-      toast.success("打卡完成，5秒後返回首頁");
-      setShowSuccess(true);
-      setTimeout(() => {
-        setShowSuccess(false);
-        setScanning(false);
-        setPage("dashboard");
-        hasScanned.current = false;
-      }, 5000);
-    }
-  } else {
-    toast.error("你不在正確位置打卡");
-    setShowFail(true);                    // show read x status
-    setTimeout(() => {
-      setShowFail(false);                // Auto clear
-      setScanning(false);                // Return Previous pace
-    }, 2000);
-  }
-};
-
-  const simulateScan = () => {
-    const simulatedData = "24.99132303960377, 121.51194818378671"
-    // const simulatedData = { lat: 24.99132303960377, lng: 121.51194818378671 };
-    // handleScan(JSON.stringify(simulatedData));
-    handleScan(simulatedData);
-  };
-
-  const getDistance = (lat1, lng1, lat2, lng2) => {
-    const R = 6371e3;
-    const toRad = (deg) => (deg * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
-
-  useEffect(() => {
-    const handEmployee = async () => {
-      try {
-        const response = await axios.get(`http://localhost:8000/employees/${userId}/`, {
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-          withCredentials: true,
-        });
-        const data = response.data;
-        setEmployeeData({
-          name: data.username,
-          id: data.employee_id,
-        });
-      } catch (err) {
-        console.error("取得員工資料失敗:", err);
-      }
-    };
-
-    if (page === "dashboard") {
-      handEmployee();
-    }
-  }, [page, userId, password]);
-  
-  const handleRelationTable = async () => {
-    try {
-      const response = await axios.get(`http://localhost:8000/relation/`, {
-        params: { employee_id: userId},
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-        withCredentials: true,
-      });
-      console.log("handleRelationTable API 回應:", response.data);
-      return response.data;
-    } catch (error) {
-      console.error("取得員工關係資料失敗:", error);
-      toast.error("取得員工關係資料失敗");
-      return {};
-    }
-  };
-
-  const submitLeave = async () => {
-    console.log('Authorization:', `Basic ${btoa(`${userId}:${password}`)}`);
-    if (!leaveForm.date || !leaveForm.duration || !leaveForm.reason) {
-      toast.error("請填寫完整請假資料");
-      return;
-    }
-
-    const start_work_time = `${leaveForm.date} 08:00:00`
-    const end_work_time = `${leaveForm.date} 17:00:00`
-    const middle_time = `${leaveForm.date} 12:00:00`
-    const noon_time = `${leaveForm.date} 13:00:00`
-
-    let start_time = "";
-    let end_time = "";
-
-    if (leaveForm.duration === "Morning") {
-      start_time = start_work_time
-      end_time = middle_time
-    } else if (leaveForm.duration === "Afternoon") {
-      start_time = noon_time
-      end_time = end_work_time
-    } else {
-      start_time = start_work_time
-      end_time = end_work_time
-    }
-    
-    console.log("請假紀錄:", start_time, end_time);
-
-    const relation_id = (await handleRelationTable())[0].id;
-    let leave_hours = ((new Date(end_time) - new Date(start_time)) / 3600000).toFixed(2);
-    if (leaveForm.duration === "Full Day") {
-      leave_hours = leave_hours -1
-    }
-    console.log("leave_hours:", leave_hours);
-    const leave = {
-      relation_id: relation_id,
-      date: leaveForm.date,
-      start_time: start_time,
-      end_time: end_time,
-      leave_reason: leaveForm.reason,
-      leave_hours: leave_hours
-    };
-
-    console.log("leave:", JSON.stringify(leave));
-    try {
-      setRecords(prev => [...prev, leave]);
-      setLeaveForm({ date: "", duration: "Full Day", reason: "" });
-      const response = await axios.post('http://localhost:8000/leave/', leave, 
-        {
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-          withCredentials: true,
-        }
-      );
-      if (response.status === 201){
-        toast.success("請假成功！");
-      } else {
-        toast.error("請假失敗！");
-      }
-    } catch (error) {
-      console.error("請假執行失敗:", error);
-      toast.error("請假執行失敗");
-    }
-    setPage("dashboard");
-  };
-
-  const groupedRecords = [...attendanceRecords, ...leaveRecords].reduce((acc, record) => {
-    const formattedDate = record.date || new Date(record.start_time).toISOString().split('T')[0];
-    acc[formattedDate] = acc[formattedDate] || { attendance: [], leave: [] };
-
-    if (record.checkin_time || record.checkout_time) {
-      acc[formattedDate].attendance.push(record);
-    } else if (record.start_time || record.end_time) {
-      acc[formattedDate].leave.push(record);
-    }
-    return acc;
-  }, {});
-
-  const handleAttendance = async (day) => {
-    try {
-      const response = await axios.get(`http://localhost:8000/attendance/`, {
-        params: { employee_id: userId, days: day },
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-        withCredentials: true,
-      });
-      console.log("API 回應:", response.data);
-      return response.data;
-    } catch (error) {
-      console.error("取得考勤紀錄失敗:", error);
-      return {};
-    }
-  };
-
-  useEffect(() => {
-    if (page === "view-records") {
-      const handleLeave = async () => {
-        try { 
-          const response = await axios.get(`http://localhost:8000/leave/`, {
-            params: { employee_id: userId, days: 3 },
-            headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-            withCredentials: true,
+        (position) => {
+          setGps({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
           });
-          console.log("handleLeave API 回應:", response.data);
-          return response.data;
-        } catch (error) {
-          console.error("取得請假紀錄失敗:", error);
-          return {};
-        }
-      };
-  
-      axios.all([handleAttendance(3), handleLeave()])
-        .then(axios.spread((attendanceRes, leaveRes) => {
-          console.log("🚀 考勤 API 回應:", attendanceRes);
-          console.log("🚀 請假 API 回應:", leaveRes);
-      
-          setAttendanceRecords(Array.isArray(attendanceRes) ? attendanceRes : []);
-          setLeaveRecords(Array.isArray(leaveRes) ? leaveRes : []);
-        }))
-        .catch(error => {
-          console.error("載入 API 失敗:", error);
-        });
+        },
+        () => toast.error('無法取得 GPS 位置，請確認定位權限已開啟')
+      );
+    } else {
+      toast.error('您的瀏覽器不支援定位功能');
     }
-  }, [page, userId, password]);
-
-  const changePassword = async () => {
-    if (!oldPassword || !newPassword) {
-      toast.error("請填寫密碼");
-      return;
-    }
-    try {
-      console.log('oldPassword:', `${oldPassword}`);
-      console.log('newPassword:', `${newPassword}`);
-
-      const response = await axios.post(`http://localhost:8000/change_password/`, {
-        old_password: oldPassword,
-        new_password: newPassword,
-        }, {
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
-          withCredentials: true
-        });
-      if (response.status === 200){
-        toast.success("變更密碼成功！");
-        setOldPassword("");
-        setNewPassword("");
-      } else {
-        toast.error("變更密碼失敗！");
-      }
-    } catch (error) {
-      console.error("變更密碼執行失敗:", error);
-      toast.error("變更密碼執行失敗");
-    }
-    setPage("dashboard");
   };
 
-  const forgotPassword = async () => {
+  /**
+   * 取得出勤記錄
+   */
+  const fetchAttendanceRecords = async () => {
+    try {
+      const response = await attendanceService.getRecords({
+        employee_id: userId,
+        days: 7,
+      });
+      console.log('📊 出勤記錄 API 回應:', response);
+      // DRF ModelViewSet 直接返回陣列，不需要 .data
+      setAttendanceRecords(Array.isArray(response) ? response : []);
+    } catch (error) {
+      console.error('取得出勤記錄失敗:', error);
+    }
+  };
+
+  /**
+   * 取得請假記錄
+   */
+  const fetchLeaveRecords = async () => {
+    try {
+      const response = await leaveService.getMyLeaveRecords({ days: 30 });
+      console.log('📋 請假記錄 API 回應:', response);
+      setLeaveRecords(response.data?.records || []);
+    } catch (error) {
+      console.error('取得請假記錄失敗:', error);
+    }
+  };
+
+  /**
+   * 取得假別額度
+   */
+  const fetchLeaveBalances = async () => {
+    try {
+      const response = await leaveService.getLeaveBalances();
+      console.log('💰 假別額度 API 回應:', response);
+      setLeaveBalances(response.data?.balances || []);
+    } catch (error) {
+      console.error('取得假別額度失敗:', error);
+    }
+  };
+
+  /**
+   * 處理請假申請成功
+   */
+  const handleLeaveSubmitSuccess = () => {
+    setShowLeaveForm(false);
+    fetchLeaveRecords();
+    fetchLeaveBalances();
+    toast.success('請假申請已送出');
+  };
+
+  /**
+   * 處理登出
+   */
+  const handleLogout = async () => {
+    await logout();
+    setPage('login');
+    setAttendanceRecords([]);
+    setLeaveRecords([]);
+  };
+
+  /**
+   * 處理忘記密碼
+   */
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
     if (!email) {
-      toast.error("請輸入Email");
+      toast.error('請輸入 Email');
       return;
     }
-    try {
-      const response = await axios.post(`http://localhost:8000/forgot_password/`, { email });
-      if (response.status === 200){
-        toast.success("臨時密碼已寄出");
-      } else {
-        toast.error("送出失敗，請稍後再試");
-      }
-    } catch (error) {
-      console.error("變更密碼執行失敗:", error);
-      toast.error("變更密碼執行失敗");
-    }
-    setEmail("");
-    setPage("login");
+    await forgotPassword(email);
+    setEmail('');
+    setPage('login');
   };
 
-  if (page === "login") {
+  /**
+   * 登入頁面
+   */
+  if (page === 'login') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-blue-50 p-4">
-        <h1 className="text-3xl font-bold mb-6 text-blue-700">宏全打卡系統</h1>
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-80">
-          <input type="text" placeholder="請輸入員工編號" value={userId} onChange={(e) => setUserId(e.target.value)} className="border p-2 mb-4 w-full rounded" />
-          <input type="password" placeholder="請輸入密碼" value={password} onChange={(e) => setPassword(e.target.value)} className="border p-2 mb-6 w-full rounded" />
-          <button onClick={handleLogin} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">登入</button>
-          <button onClick={() => setPage("forgot-password")} className="mt-3 text-sm text-blue-600">忘記密碼？</button>
-          <div className="text-xs text-gray-400 mt-4">
-            {gps ? (<p>Your Current Location<br />{gps.lat.toFixed(4)}, {gps.lng.toFixed(4)}</p>) : (<p>Locating...</p>)}
-          </div>
+      <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+        <Toaster position="top-center" richColors />
+        <LoginForm
+          onSuccess={() => setPage('dashboard')}
+          onForgotPassword={() => setPage('forgot')}
+        />
+      </div>
+    );
+  }
+
+  /**
+   * 忘記密碼頁面
+   */
+  if (page === 'forgot') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+        <Toaster position="top-center" richColors />
+        <div className="w-full max-w-md mx-auto p-8 bg-white rounded-2xl shadow-lg">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6">忘記密碼</h2>
+          <form onSubmit={handleForgotPassword} className="space-y-6">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="請輸入註冊的 Email"
+              />
+            </div>
+            <div className="flex gap-4">
+              <Button type="submit" variant="primary" size="lg" className="flex-1">
+                發送臨時密碼
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="lg"
+                onClick={() => setPage('login')}
+                className="flex-1"
+              >
+                返回登入
+              </Button>
+            </div>
+          </form>
         </div>
       </div>
     );
   }
 
-  if (scanning) {
+  /**
+   * 修改密碼頁面
+   */
+  if (page === 'changePassword') {
     return (
-      <div className="min-h-screen bg-blue-50 flex flex-col items-center justify-center p-4">
-        <div className="text-xl font-semibold text-gray-500 mb-2">員工姓名: {employeeData.name}</div>
-        <div className="text-xl font-semibold text-gray-500 mb-2">員工工號: {employeeData.id}</div>
-        <h2 className="text-2xl font-bold mb-4">掃描 GPS QR Code</h2>
-        <QRCamera key={scanSession.current} onScan={handleScan} />
-        <button onClick={simulateScan} className="mt-4 bg-gray-300 text-black py-2 px-4 rounded">
-          模擬 GPS QR Scan
-        </button>
-
-        {showSuccess && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-green-100 bg-opacity-80">
-            <div className="text-green-600 text-6xl mb-4 animate-bounce">✔️</div>
-            <div className="text-green-700 text-xl font-bold">打卡成功！</div>
-          </div>
-        )}
-
-        {showFail && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-100 bg-opacity-80">
-            <div className="text-red-600 text-6xl mb-4 animate-bounce">❌</div>
-            <div className="text-red-700 text-xl font-bold">打卡失敗！</div>
-          </div>
-        )}
-
-        {countdown !== null && (
-          <div className="text-red-500 mt-4 text-lg font-semibold">
-            將在 {countdown} 秒後返回首頁...
-          </div>
-        )}
+      <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+        <Toaster position="top-center" richColors />
+        <ChangePasswordForm
+          onSuccess={() => setPage('dashboard')}
+          onCancel={() => setPage('dashboard')}
+        />
       </div>
     );
   }
 
-  if (page === "apply-leave") {
-    return (
-      <div className="min-h-screen p-4 bg-blue-50">
-        <h1 className="text-2xl font-bold mb-4">請假</h1>
-        <input type="date" value={leaveForm.date} onChange={(e) => setLeaveForm({ ...leaveForm, date: e.target.value })} className="border p-2 mb-4 w-full rounded"/>
-        <select value={leaveForm.duration} onChange={(e) => setLeaveForm({ ...leaveForm, duration: e.target.value })} className="border p-2 mb-4 w-full rounded">
-          <option>整天</option>
-          <option>早上</option>
-          <option>下午</option>
-        </select>
-        <textarea placeholder="請假原因" value={leaveForm.reason} onChange={(e) => setLeaveForm({ ...leaveForm, reason: e.target.value })} className="border p-2 mb-4 w-full rounded"></textarea>
-        <button onClick={submitLeave} className="bg-blue-600 text-white px-4 py-2 rounded w-full">送出</button>
-        <button onClick={() => setPage("dashboard")} className="text-blue-600 mt-4 block w-full">返回</button>
-      </div>
-    );
-  }
+  /**
+   * Dashboard 頁面
+   * TODO: 拆分成獨立的 Dashboard 元件（Phase 2 後續任務）
+   */
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <Toaster position="top-center" richColors />
 
-  if (page === "change-password") {
-    return (
-      <div className="min-h-screen p-4 bg-blue-50">
-        <h1 className="text-2xl font-bold mb-4">變更密碼</h1>
-        <input type="password" placeholder="請輸入舊密碼" value={oldPassword} onChange={e => setOldPassword(e.target.value)}
-        className="border p-2 mb-4 w-full rounded"/>
-        <input type="password" placeholder="請輸入新密碼" value={newPassword} onChange={e => setNewPassword(e.target.value)}
-        className="border p-2 mb-4 w-full rounded"/>
-        <button onClick={changePassword} className="bg-blue-600 text-white px-4 py-2 rounded w-full">送出</button>
-        <button onClick={() => setPage("dashboard")} className="text-blue-600 mt-4 block w-full">返回</button>
-      </div>
-    );
-  }
+      {/* Header */}
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <h1 className="text-2xl font-bold text-gray-900">禾一系統出勤系統</h1>
+          <div className="flex gap-4">
+            <Button variant="secondary" onClick={() => setPage('changePassword')}>
+              修改密碼
+            </Button>
+            <Button variant="danger" onClick={handleLogout}>
+              登出
+            </Button>
+          </div>
+        </div>
+      </header>
 
-  if (page === "forgot-password") {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-yellow-50 p-4">
-        <h1 className="text-2xl font-bold mb-4 text-yellow-700">忘記密碼</h1>
-        <div className="bg-white p-6 rounded-2xl shadow-xl w-80">
-          <input
-            type="email"
-            placeholder="請輸入註冊 Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            className="border p-2 mb-4 w-full rounded"
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* User Info */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">歡迎，{userId}</h2>
+          <p className="text-gray-600">
+            GPS 狀態: {gps ? `✅ (${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)})` : '❌ 未取得'}
+          </p>
+        </div>
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={() => {
+              setScanning(true);
+              // TODO: 實作打卡功能（使用 QRCamera）
+            }}
+            className="h-32"
+          >
+            📷 掃描 QR Code 打卡
+          </Button>
+          <Button
+            variant="success"
+            size="lg"
+            className="h-32"
+            onClick={() => setShowLeaveForm(true)}
+          >
+            📝 申請請假
+          </Button>
+          <Button
+            variant="outline"
+            size="lg"
+            className="h-32"
+            onClick={() => {
+              console.log('🔍 點擊報表按鈕');
+              console.log('📊 出勤記錄:', attendanceRecords);
+              console.log('📋 請假記錄:', leaveRecords);
+              console.log('💰 假別額度:', leaveBalances);
+              setShowReportModal(true);
+            }}
+          >
+            📊 查看報表
+          </Button>
+        </div>
+
+        {/* Leave Balances - Phase 2 Week 4 */}
+        <div className="mb-8">
+          <h3 className="text-lg font-semibold mb-4">假別額度</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {leaveBalances.length > 0 ? (
+              leaveBalances.map((balance) => (
+                <LeaveBalanceCard key={balance.id} balance={balance} />
+              ))
+            ) : (
+              <div className="col-span-3 bg-white rounded-lg shadow p-6 text-center text-gray-500">
+                無假別額度資料
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Leave Records - Phase 2 Week 4 */}
+        <div className="mb-8">
+          <LeaveList
+            records={leaveRecords}
+            onRefresh={fetchLeaveRecords}
           />
-          <button onClick={forgotPassword} className="bg-yellow-600 text-white px-4 py-2 rounded w-full hover:bg-yellow-700">
-            寄送臨時密碼
-          </button>
-          <button onClick={() => setPage("login")} className="text-yellow-600 mt-4 block w-full text-sm">返回登入頁</button>
         </div>
-      </div>
-    )
-  }
 
+        {/* Attendance Records */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold mb-4">最近打卡記錄</h3>
+          {attendanceRecords.length > 0 ? (
+            <div className="space-y-4">
+              {attendanceRecords.slice(0, 5).map((record) => (
+                <div
+                  key={record.id}
+                  className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
+                >
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-medium">{record.date}</p>
+                      <p className="text-sm text-gray-600">
+                        上班: {record.checkin_time ? new Date(record.checkin_time).toLocaleTimeString('zh-TW') : '-'} |
+                        下班: {record.checkout_time ? new Date(record.checkout_time).toLocaleTimeString('zh-TW') : '-'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-600">工時</p>
+                      <p className="font-medium">{record.work_hours || 0} 小時</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-gray-500 text-center py-8">無打卡記錄</p>
+          )}
+        </div>
+      </main>
 
-  if (page === "view-records") {
-    return (
-      <div className="min-h-screen p-4 bg-blue-50">
-        <h1 className="text-2xl font-bold mb-4">出缺勤紀錄</h1>
-        {Object.keys(groupedRecords).length > 0 ? (
-          Object.keys(groupedRecords).sort((a, b) => new Date(b) - new Date(a)).map((date) => (
-              <div key={date} className="mb-6">
-                <h2 className="text-lg font-bold mb-2">{date}</h2>
+      {/* QR Scanner Modal */}
+      {scanning && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">掃描 QR Code</h3>
+              <button
+                onClick={() => setScanning(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+            <QRCamera
+              onScan={(result) => {
+                // TODO: 處理掃描結果，呼叫 attendanceService.clockIn()
+                console.log('QR Code:', result);
+                setScanning(false);
+              }}
+              onError={(error) => {
+                console.error('QR Scanner error:', error);
+                toast.error('掃描失敗');
+              }}
+            />
+          </div>
+        </div>
+      )}
 
-                {/* 🔥 顯示考勤紀錄 */}
-                  {groupedRecords[date].attendance.map((record, idx) => {
-                    const formattedCheckinTime = record.checkin_time ? new Date(record.checkin_time).toLocaleString("zh-CN", { timeZone: "Asia/Taipei"}) : "無出勤紀錄";
-                    const formattedCheckoutTime = (record.checkout_time && record.checkin_time !== record.checkout_time)  ? new Date(record.checkout_time).toLocaleString("zh-CN", { timeZone: "Asia/Taipei" }) : "無下班紀錄";
-                    return (
-                      <div
-                        key={idx} className={`p-3 rounded mb-2 ${!record.checkout_time ? "bg-yellow-100" : "bg-green-100"}`}>
-                        <p className="text-gray-500 text-sm">上班: {formattedCheckinTime}</p>
-                        <p className="text-gray-500 text-sm">下班: {formattedCheckoutTime}</p>
-                      </div>
-                    );
-              })}
+      {/* Leave Form Modal - Phase 2 Week 4 */}
+      {showLeaveForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">申請請假</h3>
+              <button
+                onClick={() => setShowLeaveForm(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+            <LeaveForm
+              onSuccess={handleLeaveSubmitSuccess}
+              onCancel={() => setShowLeaveForm(false)}
+            />
+          </div>
+        </div>
+      )}
 
-                {/* 🔥 顯示請假紀錄 */}
-                {groupedRecords[date]?.leave?.length > 0 ? (
-                  <div className="bg-gray-100 p-3 rounded mt-2">
-                    <h3 className="font-bold text-gray-600">請假紀錄：</h3>
-                    {groupedRecords[date].leave.map((leave, idx) => {
-                      const formattedStartTime = new Date(leave.start_time).toLocaleString("zh-CN", {
-                        timeZone: "Asia/Taipei",
-                      });
-                      const formattedEndTime = new Date(leave.end_time).toLocaleString("zh-CN", {
-                        timeZone: "Asia/Taipei",
-                      });
-                      return (
-                        <div key={idx} className="text-sm text-gray-500">
-                          <p>
-                            {formattedStartTime} ~ {formattedEndTime}
-                          </p>
-                          <p>
-                            {leave.leave_reason}
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-200 pb-4">
+              <h3 className="text-2xl font-bold text-gray-900">出勤與請假報表</h3>
+              <button
+                onClick={() => {
+                  console.log('🚪 關閉報表視窗');
+                  setShowReportModal(false);
+                }}
+                className="text-gray-500 hover:text-gray-700 text-3xl font-bold leading-none w-8 h-8 flex items-center justify-center"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* 統計卡片 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-600 font-medium">本月出勤天數</p>
+                  <p className="text-3xl font-bold text-blue-700 mt-2">
+                    {attendanceRecords.length} 天
+                  </p>
+                </div>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <p className="text-sm text-green-600 font-medium">本月請假次數</p>
+                  <p className="text-3xl font-bold text-green-700 mt-2">
+                    {leaveRecords.length} 次
+                  </p>
+                </div>
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                  <p className="text-sm text-purple-600 font-medium">剩餘假別時數</p>
+                  <p className="text-3xl font-bold text-purple-700 mt-2">
+                    {leaveBalances.reduce((sum, b) => sum + parseFloat(b.remaining_hours || 0), 0).toFixed(1)} 小時
+                  </p>
+                </div>
+              </div>
+
+              {/* 假別額度詳細 */}
+              <div className="bg-white border border-gray-200 rounded-lg p-6">
+                <h4 className="text-lg font-semibold mb-4">假別額度明細</h4>
+                <div className="space-y-3">
+                  {leaveBalances.length > 0 ? (
+                    leaveBalances.map((balance) => (
+                      <div key={balance.id} className="flex justify-between items-center border-b border-gray-100 pb-3">
+                        <div>
+                          <p className="font-medium">{balance.leave_type_display}</p>
+                          <p className="text-sm text-gray-500">
+                            總額: {balance.total_hours}h | 已用: {balance.used_hours}h
                           </p>
                         </div>
-                      );
-                    })}
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-blue-600">{balance.remaining_hours}h</p>
+                          <p className="text-xs text-gray-500">剩餘</p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-gray-500 text-center py-4">無假別額度資料</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 最近出勤記錄 */}
+              <div className="bg-white border border-gray-200 rounded-lg p-6">
+                <h4 className="text-lg font-semibold mb-4">最近出勤記錄</h4>
+                {attendanceRecords.length > 0 ? (
+                  <div className="space-y-2">
+                    {attendanceRecords.slice(0, 5).map((record) => (
+                      <div key={record.id} className="flex justify-between items-center text-sm border-b border-gray-100 pb-2">
+                        <span className="font-medium">{record.date}</span>
+                        <span className="text-gray-600">
+                          {record.checkin_time ? new Date(record.checkin_time).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                          {' ~ '}
+                          {record.checkout_time ? new Date(record.checkout_time).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        </span>
+                        <span className="font-medium text-blue-600">{record.work_hours || 0}h</span>
+                      </div>
+                    ))}
                   </div>
                 ) : (
-                  <p className="text-gray-600">沒有請假資料</p>
+                  <p className="text-gray-500 text-center py-4">無出勤記錄</p>
                 )}
               </div>
-            ))
-        ) : (
-          <p className="text-gray-600">沒有考勤紀錄</p>
-        )}
-        <button
-          onClick={() => setPage("dashboard")}
-          className="text-blue-600 mt-4 block w-full"
-        >
-          返回
-        </button>
-      </div>
-    );
-  }
 
-  return (
-    <div className="min-h-screen bg-blue-50 p-4">
-      <h1 className="text-2xl font-bold text-blue-700 text-center mb-4">考勤系統</h1>
-      <div className="flex space-x-2 mb-4">
-        <button onClick={() => setPage("change-password")} className="text-blue-600 ml-auto">變更密碼</button>
-        <button onClick={handleLogout} className="text-blue-600">登出</button>
-      </div>
-      <div className="bg-white rounded-2xl shadow p-6 mb-6">
-        <p className="text-gray-500 mb-4">{new Date().toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-        <div className="text-xl font-semibold text-gray-500 mb-2">員工姓名: {employeeData.name}</div>
-        <div className="text-xl font-semibold text-gray-500 mb-2">員工工號: {userId}</div>
-        <div className="flex space-x-4 my-6">
-          <button onClick={() => startScan("in")} className="flex-1 bg-green-500 text-white px-4 py-2 rounded">上班打卡</button>
-          <button onClick={() => startScan("out")} className="flex-1 bg-red-500 text-white px-4 py-2 rounded">下班打卡</button>
+              {/* 最近請假記錄 */}
+              <div className="bg-white border border-gray-200 rounded-lg p-6">
+                <h4 className="text-lg font-semibold mb-4">最近請假記錄</h4>
+                {leaveRecords.length > 0 ? (
+                  <div className="space-y-2">
+                    {leaveRecords.slice(0, 5).map((record) => (
+                      <div key={record.id} className="flex justify-between items-center text-sm border-b border-gray-100 pb-2">
+                        <div>
+                          <p className="font-medium">{record.leave_type_display}</p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(record.start_time).toLocaleDateString('zh-TW')} - {new Date(record.end_time).toLocaleDateString('zh-TW')}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            record.status === 'approved' ? 'bg-green-100 text-green-700' :
+                            record.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                            'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {record.status_display}
+                          </span>
+                          <p className="text-xs text-gray-500 mt-1">{record.leave_hours}h</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-center py-4">無請假記錄</p>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="flex space-x-4">
-          <button onClick={() => setPage("apply-leave")} className="flex-1 bg-gray-200 py-2 rounded">請假</button>
-          <button onClick={() => setPage("view-records")} className="flex-1 bg-gray-200 py-2 rounded">查看出勤紀錄</button>
-        </div>
-      </div>
+      )}
     </div>
   );
 };
