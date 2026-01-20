@@ -19,6 +19,10 @@ import LeaveList from './components/leave/LeaveList';
 import LeaveBalanceCard from './components/leave/LeaveBalanceCard';
 import ApprovalList from './components/approval/ApprovalList';
 import leaveService from './services/leaveService';
+// Phase 1: 補打卡元件
+import MakeupClockForm from './components/attendance/MakeupClockForm';
+import MakeupClockList from './components/attendance/MakeupClockList';
+import makeupClockService from './services/makeupClockService';
 import './App.css';
 
 const App = () => {
@@ -40,6 +44,10 @@ const App = () => {
   const [leaveBalances, setLeaveBalances] = useState([]);
   const [showReportModal, setShowReportModal] = useState(false);
 
+  // Phase 1: 補打卡狀態
+  const [showMakeupForm, setShowMakeupForm] = useState(false);
+  const [makeupQuota, setMakeupQuota] = useState(null);
+
   // 忘記密碼表單
   const [email, setEmail] = useState('');
 
@@ -54,6 +62,7 @@ const App = () => {
       fetchAttendanceRecords();
       fetchLeaveRecords();
       fetchLeaveBalances();
+      fetchMakeupQuota();
     }
   }, [isAuthenticated, page, userId]);
 
@@ -120,6 +129,19 @@ const App = () => {
   };
 
   /**
+   * 取得補打卡額度
+   */
+  const fetchMakeupQuota = async () => {
+    try {
+      const response = await makeupClockService.getQuota();
+      console.log('🔧 補打卡額度 API 回應:', response);
+      setMakeupQuota(response.data);
+    } catch (error) {
+      console.error('取得補打卡額度失敗:', error);
+    }
+  };
+
+  /**
    * 處理請假申請成功
    */
   const handleLeaveSubmitSuccess = () => {
@@ -127,6 +149,16 @@ const App = () => {
     fetchLeaveRecords();
     fetchLeaveBalances();
     toast.success('請假申請已送出');
+  };
+
+  /**
+   * 處理補打卡申請成功
+   */
+  const handleMakeupSubmitSuccess = () => {
+    setShowMakeupForm(false);
+    fetchAttendanceRecords();
+    fetchMakeupQuota();
+    toast.success('補打卡申請已送出');
   };
 
   /**
@@ -261,7 +293,7 @@ const App = () => {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Button
             variant="primary"
             size="lg"
@@ -280,6 +312,19 @@ const App = () => {
             onClick={() => setShowLeaveForm(true)}
           >
             📝 申請請假
+          </Button>
+          <Button
+            variant="warning"
+            size="lg"
+            className="h-32"
+            onClick={() => setShowMakeupForm(true)}
+          >
+            🔧 補打卡申請
+            {makeupQuota && (
+              <span className="block text-sm mt-1">
+                剩餘 {makeupQuota.remaining_count} 次
+              </span>
+            )}
           </Button>
           <Button
             variant="outline"
@@ -333,7 +378,24 @@ const App = () => {
                 >
                   <div className="flex justify-between items-center">
                     <div>
-                      <p className="font-medium">{record.date}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium">{record.date}</p>
+                        {record.is_late && (
+                          <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded">
+                            遲到 {record.late_minutes} 分鐘
+                          </span>
+                        )}
+                        {record.is_early_leave && (
+                          <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded">
+                            早退 {record.early_leave_minutes} 分鐘
+                          </span>
+                        )}
+                        {record.is_makeup && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                            補打卡
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-gray-600">
                         上班: {record.checkin_time ? new Date(record.checkin_time).toLocaleTimeString('zh-TW') : '-'} |
                         下班: {record.checkout_time ? new Date(record.checkout_time).toLocaleTimeString('zh-TW') : '-'}
@@ -350,6 +412,11 @@ const App = () => {
           ) : (
             <p className="text-gray-500 text-center py-8">無打卡記錄</p>
           )}
+        </div>
+
+        {/* Makeup Clock List - Phase 1 */}
+        <div className="mt-8">
+          <MakeupClockList onRefresh={fetchMakeupQuota} />
         </div>
       </main>
 
@@ -397,6 +464,28 @@ const App = () => {
             <LeaveForm
               onSuccess={handleLeaveSubmitSuccess}
               onCancel={() => setShowLeaveForm(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Makeup Clock Form Modal - Phase 1 */}
+      {showMakeupForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">補打卡申請</h3>
+              <button
+                onClick={() => setShowMakeupForm(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+            <MakeupClockForm
+              onSuccess={handleMakeupSubmitSuccess}
+              onCancel={() => setShowMakeupForm(false)}
+              attendanceRecords={attendanceRecords}
             />
           </div>
         </div>

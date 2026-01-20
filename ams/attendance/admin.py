@@ -6,7 +6,9 @@ import openpyxl
 from .models import (
     Employees, Companies, EmpCompanyRel, LeaveRecords,
     AttendanceRecords, ApprovalRecords, LeaveBalances,
-    ManagerialRelationship, ApprovalPolicy
+    ManagerialRelationship, ApprovalPolicy,
+    # Phase 1 新增
+    WorkSchedule, MakeupClockRequest, MakeupClockApproval, MakeupClockQuota
 )
 
 class DateRangeForm(forms.Form):
@@ -358,7 +360,7 @@ class ApprovalPolicyAdmin(admin.ModelAdmin):
     list_display = ('id', 'policy_name', 'company_id', 'min_days', 'max_days', 'is_active', 'created_at')
     list_filter = ('is_active', 'company_id')
     search_fields = ['policy_name']
-    
+
     fieldsets = (
         ('基本資訊', {
             'fields': ('policy_name', 'company_id', 'is_active')
@@ -376,7 +378,7 @@ class ApprovalPolicyAdmin(admin.ModelAdmin):
                 {"level": 2, "role": "hr", "description": "人資部門"},
                 {"level": 3, "role": "ceo", "description": "總經理"}
             ]
-            
+
             role 可選值：
             - manager: 直屬主管（自動取得）
             - hr: 人資部門（employee_id 以 HR 開頭）
@@ -412,4 +414,74 @@ class ApprovalPolicyAdmin(admin.ModelAdmin):
         if not change:  # 新增時
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+# =====================================================
+# Phase 1 新增：工時設定與補打卡 Admin
+# =====================================================
+
+@admin.register(WorkSchedule)
+class WorkScheduleAdmin(admin.ModelAdmin):
+    """工時設定管理"""
+    list_display = ('id', 'company_id', 'name', 'work_start_time', 'work_end_time',
+                    'standard_work_hours', 'grace_period_minutes', 'is_default', 'is_active')
+    list_filter = ('company_id', 'is_default', 'is_active')
+    search_fields = ['name', 'company_id__name']
+
+    fieldsets = (
+        ('基本資訊', {
+            'fields': ('company_id', 'name', 'is_default', 'is_active')
+        }),
+        ('工時設定', {
+            'fields': ('work_start_time', 'work_end_time', 'standard_work_hours', 'lunch_break_minutes'),
+            'description': '設定標準上下班時間與工時'
+        }),
+        ('遲到設定', {
+            'fields': ('grace_period_minutes',),
+            'description': '遲到寬限時間，在此時間內打卡不算遲到'
+        }),
+    )
+
+
+@admin.register(MakeupClockRequest)
+class MakeupClockRequestAdmin(admin.ModelAdmin):
+    """補打卡申請管理"""
+    list_display = ('id', 'employee_display', 'date', 'makeup_type', 'status', 'reason_short', 'created_at')
+    list_filter = ('status', 'makeup_type', 'date')
+    search_fields = ['relation_id__employee_id__username', 'relation_id__employee_id__employee_id', 'reason']
+    date_hierarchy = 'date'
+    readonly_fields = ('created_at', 'updated_at')
+
+    def employee_display(self, obj):
+        return f"{obj.relation_id.employee_id.username} ({obj.relation_id.employee_id.employee_id})"
+    employee_display.short_description = '申請人'
+
+    def reason_short(self, obj):
+        return obj.reason[:30] + '...' if len(obj.reason) > 30 else obj.reason
+    reason_short.short_description = '原因'
+
+
+@admin.register(MakeupClockApproval)
+class MakeupClockApprovalAdmin(admin.ModelAdmin):
+    """補打卡審批記錄管理"""
+    list_display = ('id', 'request_id', 'approver_display', 'approval_level', 'status', 'approved_at')
+    list_filter = ('status', 'approval_level')
+    search_fields = ['request_id__relation_id__employee_id__username', 'approver_id__username']
+    readonly_fields = ('created_at',)
+
+    def approver_display(self, obj):
+        return f"{obj.approver_id.username} ({obj.approver_id.employee_id})"
+    approver_display.short_description = '審批人'
+
+
+@admin.register(MakeupClockQuota)
+class MakeupClockQuotaAdmin(admin.ModelAdmin):
+    """補打卡額度管理"""
+    list_display = ('id', 'employee_display', 'year', 'total_count', 'used_count', 'remaining_count')
+    list_filter = ('year',)
+    search_fields = ['employee_id__username', 'employee_id__employee_id']
+
+    def employee_display(self, obj):
+        return f"{obj.employee_id.username} ({obj.employee_id.employee_id})"
+    employee_display.short_description = '員工'
 

@@ -28,6 +28,17 @@ urlpatterns = [
     path('approval/approve/<int:approval_id>/', views.approve_leave, name='approve_leave'),
     path('approval/reject/<int:approval_id>/', views.reject_leave, name='reject_leave'),
     path('approval/pending/', views.pending_approvals, name='pending_approvals'),
+
+    # Phase 1：補打卡 API
+    path('makeup-clock/apply/', views.apply_makeup_clock, name='apply_makeup_clock'),
+    path('makeup-clock/my-requests/', views.my_makeup_requests, name='my_makeup_requests'),
+    path('makeup-clock/quota/', views.makeup_clock_quota, name='makeup_clock_quota'),
+    path('makeup-clock/approve/<int:approval_id>/', views.approve_makeup_clock, name='approve_makeup_clock'),
+    path('makeup-clock/reject/<int:approval_id>/', views.reject_makeup_clock, name='reject_makeup_clock'),
+    path('makeup-clock/pending/', views.pending_makeup_approvals, name='pending_makeup_approvals'),
+
+    # Phase 1：班表 API
+    path('schedule/my-schedule/', views.my_work_schedule, name='my_work_schedule'),
 ]
 
 urlpatterns += router.urls

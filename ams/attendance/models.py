@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from datetime import time
+from decimal import Decimal
 
 
 class Employees(AbstractUser):
@@ -37,6 +39,64 @@ class Companies(models.Model):
     class Meta:
         verbose_name_plural = "公司"
 
+
+class WorkSchedule(models.Model):
+    """工時設定表 - Phase 1 新增"""
+
+    company_id = models.ForeignKey(
+        Companies,
+        on_delete=models.CASCADE,
+        verbose_name="公司",
+        related_name="work_schedules"
+    )
+    name = models.CharField(
+        verbose_name="班表名稱",
+        max_length=50,
+        default="標準班"
+    )
+    work_start_time = models.TimeField(
+        verbose_name="上班時間",
+        default=time(9, 0)  # 09:00
+    )
+    work_end_time = models.TimeField(
+        verbose_name="下班時間",
+        default=time(18, 0)  # 18:00
+    )
+    standard_work_hours = models.DecimalField(
+        verbose_name="標準工時（小時）",
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('8.00')
+    )
+    lunch_break_minutes = models.IntegerField(
+        verbose_name="午休時間（分鐘）",
+        default=60
+    )
+    grace_period_minutes = models.IntegerField(
+        verbose_name="遲到寬限時間（分鐘）",
+        default=10,
+        help_text="在此時間內打卡不算遲到"
+    )
+    is_default = models.BooleanField(
+        verbose_name="是否為預設班表",
+        default=False
+    )
+    is_active = models.BooleanField(
+        verbose_name="是否啟用",
+        default=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="建立時間")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新時間")
+
+    class Meta:
+        verbose_name_plural = "工時設定"
+        ordering = ['company_id', 'name']
+        unique_together = ['company_id', 'name']
+
+    def __str__(self):
+        return f"{self.company_id.name} - {self.name} ({self.work_start_time}-{self.work_end_time})"
+
+
 class EmpCompanyRel(models.Model):
     employee_id = models.ForeignKey(Employees, on_delete=models.CASCADE, verbose_name=("員工編號"), related_name="employee", to_field="employee_id") # 設定反向關聯名稱
     company_id = models.ForeignKey(Companies, on_delete=models.CASCADE, verbose_name=("公司編號"), related_name="company")
@@ -52,6 +112,16 @@ class EmpCompanyRel(models.Model):
         null=True,
         blank=True,
         help_text="由 HR 或總經理指定"
+    )
+    # Phase 1 新增：員工專屬班表
+    work_schedule = models.ForeignKey(
+        'WorkSchedule',
+        on_delete=models.SET_NULL,
+        verbose_name="員工班表",
+        related_name="employees",
+        null=True,
+        blank=True,
+        help_text="員工專屬班表，留空則使用公司預設"
     )
 
     class Meta:
@@ -145,8 +215,43 @@ class AttendanceRecords(models.Model):
     checkout_location = models.TextField(verbose_name=("下班打卡位置"))
     work_hours = models.DecimalField(verbose_name=("上班總時數"), max_digits=5, decimal_places=2)
 
+    # Phase 1 新增：班表與遲到/早退欄位
+    schedule = models.ForeignKey(
+        'WorkSchedule',
+        on_delete=models.SET_NULL,
+        verbose_name="適用班表",
+        related_name="attendance_records",
+        null=True,
+        blank=True
+    )
+    is_late = models.BooleanField(
+        verbose_name="是否遲到",
+        default=False
+    )
+    late_minutes = models.IntegerField(
+        verbose_name="遲到分鐘數",
+        default=0
+    )
+    is_early_leave = models.BooleanField(
+        verbose_name="是否早退",
+        default=False
+    )
+    early_leave_minutes = models.IntegerField(
+        verbose_name="早退分鐘數",
+        default=0
+    )
+    is_makeup = models.BooleanField(
+        verbose_name="是否為補打卡",
+        default=False,
+        help_text="此記錄是否由補打卡產生/修改"
+    )
+
     class Meta:
         verbose_name_plural = "出缺勤紀錄"
+        indexes = [
+            models.Index(fields=['relation_id', 'date']),
+            models.Index(fields=['is_late']),
+        ]
 
 
 class ApprovalRecords(models.Model):
@@ -343,4 +448,170 @@ class ApprovalPolicy(models.Model):
     def __str__(self):
         max_text = f"{self.max_days}" if self.max_days else "無上限"
         return f"{self.policy_name} ({self.min_days}-{max_text} 天)"
+
+
+# =====================================================
+# Phase 1 新增：補打卡相關模型
+# =====================================================
+
+class MakeupClockRequest(models.Model):
+    """補打卡申請表 - Phase 1 新增"""
+
+    MAKEUP_TYPE_CHOICES = [
+        ('checkin', '補上班打卡'),
+        ('checkout', '補下班打卡'),
+        ('both', '補全日打卡'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', '待審批'),
+        ('approved', '已批准'),
+        ('rejected', '已拒絕'),
+    ]
+
+    relation_id = models.ForeignKey(
+        EmpCompanyRel,
+        on_delete=models.CASCADE,
+        verbose_name="員工-公司關聯",
+        related_name="makeup_requests"
+    )
+    date = models.DateField(verbose_name="補打卡日期")
+    makeup_type = models.CharField(
+        verbose_name="補打卡類型",
+        max_length=20,
+        choices=MAKEUP_TYPE_CHOICES,
+        default='checkin'
+    )
+    original_checkin_time = models.DateTimeField(
+        verbose_name="原上班打卡時間",
+        null=True,
+        blank=True
+    )
+    original_checkout_time = models.DateTimeField(
+        verbose_name="原下班打卡時間",
+        null=True,
+        blank=True
+    )
+    requested_checkin_time = models.DateTimeField(
+        verbose_name="申請的上班時間",
+        null=True,
+        blank=True
+    )
+    requested_checkout_time = models.DateTimeField(
+        verbose_name="申請的下班時間",
+        null=True,
+        blank=True
+    )
+    reason = models.TextField(verbose_name="補打卡原因")
+    status = models.CharField(
+        verbose_name="審批狀態",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    attendance_record = models.ForeignKey(
+        AttendanceRecords,
+        on_delete=models.SET_NULL,
+        verbose_name="關聯的打卡記錄",
+        related_name="makeup_requests",
+        null=True,
+        blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="申請時間")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新時間")
+
+    class Meta:
+        verbose_name_plural = "補打卡申請"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['relation_id', 'status']),
+            models.Index(fields=['date']),
+        ]
+
+    def __str__(self):
+        return f"{self.relation_id.employee_id.username} - {self.date} - {self.get_makeup_type_display()}"
+
+
+class MakeupClockApproval(models.Model):
+    """補打卡審批記錄 - Phase 1 新增"""
+
+    STATUS_CHOICES = [
+        ('pending', '待審批'),
+        ('approved', '已批准'),
+        ('rejected', '已拒絕'),
+    ]
+
+    request_id = models.ForeignKey(
+        MakeupClockRequest,
+        on_delete=models.CASCADE,
+        verbose_name="補打卡申請",
+        related_name="approvals"
+    )
+    approver_id = models.ForeignKey(
+        Employees,
+        on_delete=models.CASCADE,
+        verbose_name="審批人",
+        related_name="makeup_approvals",
+        to_field="employee_id"
+    )
+    approval_level = models.IntegerField(
+        verbose_name="審批層級",
+        default=1,
+        help_text="1=主管"
+    )
+    status = models.CharField(
+        verbose_name="審批狀態",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    comment = models.TextField(verbose_name="審批意見", blank=True, null=True)
+    approved_at = models.DateTimeField(verbose_name="審批時間", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="建立時間")
+
+    class Meta:
+        verbose_name_plural = "補打卡審批記錄"
+        ordering = ['approval_level', '-created_at']
+
+    def __str__(self):
+        return f"補打卡審批 #{self.id} - {self.get_status_display()}"
+
+
+class MakeupClockQuota(models.Model):
+    """補打卡年度額度 - Phase 1 新增"""
+
+    employee_id = models.ForeignKey(
+        Employees,
+        on_delete=models.CASCADE,
+        verbose_name="員工",
+        related_name="makeup_quotas",
+        to_field="employee_id"
+    )
+    year = models.IntegerField(verbose_name="年度")
+    total_count = models.IntegerField(
+        verbose_name="年度總額度",
+        default=24,
+        help_text="每年可補打卡次數上限"
+    )
+    used_count = models.IntegerField(
+        verbose_name="已使用次數",
+        default=0
+    )
+    remaining_count = models.IntegerField(
+        verbose_name="剩餘次數",
+        default=24
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新時間")
+
+    class Meta:
+        verbose_name_plural = "補打卡額度"
+        unique_together = ['employee_id', 'year']
+
+    def save(self, *args, **kwargs):
+        """自動計算剩餘次數"""
+        self.remaining_count = self.total_count - self.used_count
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.employee_id.username} - {self.year} 年 ({self.remaining_count}/{self.total_count})"
 

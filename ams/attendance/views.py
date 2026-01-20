@@ -317,7 +317,52 @@ def clock_in(request):
         now = timezone.now()
         location = f"{user_lat}, {user_lng}"
 
-        # 9. 建立打卡記錄
+        # =====================================================
+        # Phase 1 新增：取得員工班表並判定遲到
+        # =====================================================
+        from .models import WorkSchedule, EmpCompanyRel
+        from datetime import datetime, timedelta
+
+        # 取得員工關聯資訊
+        try:
+            relation = EmpCompanyRel.objects.get(id=relation_id)
+        except EmpCompanyRel.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': {
+                    'code': 'RELATION_NOT_FOUND',
+                    'message': '無效的員工關聯'
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 取得班表（優先員工專屬，否則使用公司預設）
+        schedule = relation.work_schedule
+        if not schedule:
+            schedule = WorkSchedule.objects.filter(
+                company_id=relation.company_id,
+                is_default=True,
+                is_active=True
+            ).first()
+
+        # 判定遲到
+        is_late = False
+        late_minutes = 0
+
+        if schedule:
+            # 組合今日的上班時間
+            scheduled_start = timezone.make_aware(
+                datetime.combine(today, schedule.work_start_time)
+            )
+            # 加上寬限時間
+            grace_deadline = scheduled_start + timedelta(minutes=schedule.grace_period_minutes)
+
+            if now > grace_deadline:
+                is_late = True
+                late_minutes = int((now - scheduled_start).total_seconds() / 60)
+                if late_minutes < 0:
+                    late_minutes = 0
+
+        # 9. 建立打卡記錄（含遲到資訊）
         record = AttendanceRecords.objects.create(
             relation_id_id=relation_id,
             date=today,
@@ -325,20 +370,35 @@ def clock_in(request):
             checkout_time=now,  # 初始設定為相同時間
             checkin_location=location,
             checkout_location=location,
-            work_hours=Decimal('0.00')
+            work_hours=Decimal('0.00'),
+            schedule=schedule,      # Phase 1 新增
+            is_late=is_late,        # Phase 1 新增
+            late_minutes=late_minutes  # Phase 1 新增
         )
 
-        # 10. 返回成功回應
+        # 10. 返回成功回應（含遲到資訊）
+        response_data = {
+            'id': record.id,
+            'date': str(record.date),
+            'checkin_time': record.checkin_time.isoformat(),
+            'checkin_location': record.checkin_location,
+            'distance': round(distance, 2)
+        }
+
+        # Phase 1 新增：遲到提示
+        if is_late:
+            response_data['is_late'] = True
+            response_data['late_minutes'] = late_minutes
+            message = f'打卡成功，但您已遲到 {late_minutes} 分鐘'
+        else:
+            response_data['is_late'] = False
+            response_data['late_minutes'] = 0
+            message = '打卡成功'
+
         return Response({
             'success': True,
-            'message': '打卡成功',
-            'data': {
-                'id': record.id,
-                'date': str(record.date),
-                'checkin_time': record.checkin_time.isoformat(),
-                'checkin_location': record.checkin_location,
-                'distance': round(distance, 2)
-            }
+            'message': message,
+            'data': response_data
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
@@ -447,24 +507,59 @@ def clock_out(request, record_id):
         # 8. 計算工時（後端計算）
         work_hours = calculate_work_hours(record.checkin_time, now)
 
-        # 9. 更新記錄
+        # =====================================================
+        # Phase 1 新增：判定早退
+        # =====================================================
+        from datetime import datetime, timedelta
+
+        is_early_leave = False
+        early_leave_minutes = 0
+
+        schedule = record.schedule
+        if schedule:
+            # 組合今日的下班時間
+            scheduled_end = timezone.make_aware(
+                datetime.combine(record.date, schedule.work_end_time)
+            )
+
+            if now < scheduled_end:
+                is_early_leave = True
+                early_leave_minutes = int((scheduled_end - now).total_seconds() / 60)
+                if early_leave_minutes < 0:
+                    early_leave_minutes = 0
+
+        # 9. 更新記錄（含早退資訊）
         record.checkout_time = now
         record.checkout_location = location
         record.work_hours = work_hours
+        record.is_early_leave = is_early_leave      # Phase 1 新增
+        record.early_leave_minutes = early_leave_minutes  # Phase 1 新增
         record.save()
 
-        # 10. 返回成功回應
+        # 10. 返回成功回應（含早退資訊）
+        response_data = {
+            'id': record.id,
+            'date': str(record.date),
+            'checkin_time': record.checkin_time.isoformat(),
+            'checkout_time': record.checkout_time.isoformat(),
+            'work_hours': float(record.work_hours),
+            'distance': round(distance, 2)
+        }
+
+        # Phase 1 新增：早退提示
+        if is_early_leave:
+            response_data['is_early_leave'] = True
+            response_data['early_leave_minutes'] = early_leave_minutes
+            message = f'打卡成功，但您提早 {early_leave_minutes} 分鐘下班'
+        else:
+            response_data['is_early_leave'] = False
+            response_data['early_leave_minutes'] = 0
+            message = '打卡成功'
+
         return Response({
             'success': True,
-            'message': '打卡成功',
-            'data': {
-                'id': record.id,
-                'date': str(record.date),
-                'checkin_time': record.checkin_time.isoformat(),
-                'checkout_time': record.checkout_time.isoformat(),
-                'work_hours': float(record.work_hours),
-                'distance': round(distance, 2)
-            }
+            'message': message,
+            'data': response_data
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1036,4 +1131,505 @@ def pending_approvals(request):
             "查詢失敗，請稍後再試",
             code="INTERNAL_ERROR"
         )
+
+
+# =====================================================
+# Phase 1 新增：補打卡 API
+# =====================================================
+from .models import MakeupClockRequest, MakeupClockApproval, MakeupClockQuota, WorkSchedule
+from .serializers import MakeupClockRequestSerializer, MakeupClockApprovalSerializer, MakeupClockQuotaSerializer, WorkScheduleSerializer
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def apply_makeup_clock(request):
+    """
+    補打卡申請 API（Phase 1）
+
+    請求參數：
+    - relation_id: 員工-公司關聯 ID
+    - date: 補打卡日期（YYYY-MM-DD）
+    - makeup_type: 補打卡類型（checkin/checkout/both）
+    - requested_checkin_time: 申請的上班時間（HH:MM）
+    - requested_checkout_time: 申請的下班時間（HH:MM）
+    - reason: 補打卡原因
+    """
+    try:
+        # 1. 取得參數
+        relation_id = request.data.get('relation_id')
+        date_str = request.data.get('date')
+        makeup_type = request.data.get('makeup_type', 'checkin')
+        requested_checkin = request.data.get('requested_checkin_time')
+        requested_checkout = request.data.get('requested_checkout_time')
+        reason = request.data.get('reason', '')
+
+        # 2. 參數驗證
+        if not all([relation_id, date_str, reason]):
+            return validation_error_response("缺少必要參數（relation_id, date, reason）")
+
+        # 3. 驗證 relation
+        try:
+            relation = EmpCompanyRel.objects.get(id=relation_id)
+            employee = relation.employee_id
+        except EmpCompanyRel.DoesNotExist:
+            return not_found_response("無效的員工-公司關聯")
+
+        # 4. 檢查補打卡額度
+        current_year = datetime.now().year
+        quota, created = MakeupClockQuota.objects.get_or_create(
+            employee_id=employee,
+            year=current_year,
+            defaults={'total_count': 24, 'used_count': 0}
+        )
+
+        if quota.remaining_count <= 0:
+            return error_response(
+                f"補打卡額度已用完。本年度額度：{quota.total_count} 次",
+                code="QUOTA_EXCEEDED",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 5. 檢查日期是否允許（只能補最近 7 天）
+        from datetime import date as date_class
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        days_ago = (date_class.today() - target_date).days
+        if days_ago > 7 or days_ago < 0:
+            return error_response(
+                "只能申請最近 7 天內的補打卡",
+                code="INVALID_DATE",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 6. 查找原始打卡記錄
+        existing_record = AttendanceRecords.objects.filter(
+            relation_id=relation,
+            date=target_date
+        ).first()
+
+        # 7. 處理時間格式
+        requested_checkin_dt = None
+        requested_checkout_dt = None
+        if requested_checkin:
+            checkin_time = datetime.strptime(requested_checkin, '%H:%M').time()
+            requested_checkin_dt = timezone.make_aware(
+                datetime.combine(target_date, checkin_time)
+            )
+        if requested_checkout:
+            checkout_time = datetime.strptime(requested_checkout, '%H:%M').time()
+            requested_checkout_dt = timezone.make_aware(
+                datetime.combine(target_date, checkout_time)
+            )
+
+        # 8. 建立補打卡申請
+        makeup_request = MakeupClockRequest.objects.create(
+            relation_id=relation,
+            date=target_date,
+            makeup_type=makeup_type,
+            original_checkin_time=existing_record.checkin_time if existing_record else None,
+            original_checkout_time=existing_record.checkout_time if existing_record else None,
+            requested_checkin_time=requested_checkin_dt,
+            requested_checkout_time=requested_checkout_dt,
+            reason=reason,
+            attendance_record=existing_record
+        )
+
+        # 9. 建立審批記錄（直屬主管）
+        approver = relation.direct_manager
+        if not approver:
+            # 嘗試從 ManagerialRelationship 取得
+            from .models import ManagerialRelationship
+            mgr_rel = ManagerialRelationship.objects.filter(
+                employee_id=employee,
+                effective_date__lte=date_class.today(),
+                end_date__isnull=True
+            ).first()
+            if mgr_rel:
+                approver = mgr_rel.manager_id
+
+        if approver:
+            MakeupClockApproval.objects.create(
+                request_id=makeup_request,
+                approver_id=approver,
+                approval_level=1,
+                status='pending'
+            )
+
+        return success_response(
+            message="補打卡申請已提交",
+            data={
+                'request_id': makeup_request.id,
+                'date': str(makeup_request.date),
+                'makeup_type': makeup_request.get_makeup_type_display(),
+                'status': makeup_request.get_status_display(),
+                'remaining_quota': quota.remaining_count
+            },
+            status_code=status.HTTP_201_CREATED
+        )
+
+    except Exception as e:
+        print(f"補打卡申請錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("補打卡申請失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def approve_makeup_clock(request, approval_id):
+    """
+    批准補打卡 API（Phase 1）
+
+    URL: POST /makeup-clock/approve/<approval_id>/
+    請求參數：
+    - comment: 審批意見（選填）
+    """
+    try:
+        # 1. 取得審批記錄
+        try:
+            approval = MakeupClockApproval.objects.get(id=approval_id)
+        except MakeupClockApproval.DoesNotExist:
+            return not_found_response("找不到審批記錄")
+
+        # 2. 驗證權限
+        if approval.approver_id != request.user:
+            return error_response(
+                "您沒有權限審批此申請",
+                code="PERMISSION_DENIED",
+                status_code=status.HTTP_403_FORBIDDEN
+            )
+
+        # 3. 檢查狀態
+        if approval.status != 'pending':
+            return error_response(
+                f"此申請已經{approval.get_status_display()}",
+                code="ALREADY_PROCESSED",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 更新審批記錄
+        approval.status = 'approved'
+        approval.comment = request.data.get('comment', '')
+        approval.approved_at = timezone.now()
+        approval.save()
+
+        # 5. 更新補打卡申請狀態
+        makeup_request = approval.request_id
+        makeup_request.status = 'approved'
+        makeup_request.save()
+
+        # 6. 建立或更新出勤記錄
+        _apply_makeup_clock_to_attendance(makeup_request)
+
+        # 7. 扣除補打卡額度
+        employee = makeup_request.relation_id.employee_id
+        current_year = datetime.now().year
+        try:
+            quota = MakeupClockQuota.objects.get(
+                employee_id=employee,
+                year=current_year
+            )
+            quota.used_count += 1
+            quota.save()
+        except MakeupClockQuota.DoesNotExist:
+            pass
+
+        return success_response(
+            message="已批准補打卡申請",
+            data={
+                'approval_id': approval.id,
+                'request_id': makeup_request.id,
+                'status': makeup_request.get_status_display(),
+                'approved_at': approval.approved_at
+            }
+        )
+
+    except Exception as e:
+        print(f"批准補打卡錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("批准失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reject_makeup_clock(request, approval_id):
+    """
+    拒絕補打卡 API（Phase 1）
+
+    URL: POST /makeup-clock/reject/<approval_id>/
+    請求參數：
+    - comment: 拒絕原因（必填）
+    """
+    try:
+        # 1. 取得審批記錄
+        try:
+            approval = MakeupClockApproval.objects.get(id=approval_id)
+        except MakeupClockApproval.DoesNotExist:
+            return not_found_response("找不到審批記錄")
+
+        # 2. 驗證權限
+        if approval.approver_id != request.user:
+            return error_response(
+                "您沒有權限審批此申請",
+                code="PERMISSION_DENIED",
+                status_code=status.HTTP_403_FORBIDDEN
+            )
+
+        # 3. 檢查狀態
+        if approval.status != 'pending':
+            return error_response(
+                f"此申請已經{approval.get_status_display()}",
+                code="ALREADY_PROCESSED",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 驗證拒絕原因
+        comment = request.data.get('comment', '')
+        if not comment:
+            return validation_error_response("請輸入拒絕原因")
+
+        # 5. 更新審批記錄
+        approval.status = 'rejected'
+        approval.comment = comment
+        approval.approved_at = timezone.now()
+        approval.save()
+
+        # 6. 更新補打卡申請狀態
+        makeup_request = approval.request_id
+        makeup_request.status = 'rejected'
+        makeup_request.save()
+
+        return success_response(
+            message="已拒絕補打卡申請",
+            data={
+                'approval_id': approval.id,
+                'request_id': makeup_request.id,
+                'status': makeup_request.get_status_display(),
+                'comment': comment
+            }
+        )
+
+    except Exception as e:
+        print(f"拒絕補打卡錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("拒絕失敗，請稍後再試")
+
+
+def _apply_makeup_clock_to_attendance(makeup_request):
+    """將補打卡申請應用到出勤記錄（內部函數）"""
+    try:
+        relation = makeup_request.relation_id
+        target_date = makeup_request.date
+
+        # 查找或建立出勤記錄
+        record = makeup_request.attendance_record
+        if not record:
+            # 建立新的出勤記錄
+            record = AttendanceRecords.objects.create(
+                relation_id=relation,
+                date=target_date,
+                checkin_time=makeup_request.requested_checkin_time or timezone.now(),
+                checkout_time=makeup_request.requested_checkout_time or timezone.now(),
+                checkin_location="補打卡",
+                checkout_location="補打卡",
+                work_hours=Decimal('0.00'),
+                is_makeup=True
+            )
+
+        # 根據補打卡類型更新記錄
+        if makeup_request.makeup_type in ['checkin', 'both']:
+            if makeup_request.requested_checkin_time:
+                record.checkin_time = makeup_request.requested_checkin_time
+                record.checkin_location = "補打卡"
+
+        if makeup_request.makeup_type in ['checkout', 'both']:
+            if makeup_request.requested_checkout_time:
+                record.checkout_time = makeup_request.requested_checkout_time
+                record.checkout_location = "補打卡"
+
+        # 重新計算工時
+        if record.checkin_time and record.checkout_time:
+            record.work_hours = calculate_work_hours(record.checkin_time, record.checkout_time)
+
+        record.is_makeup = True
+        record.save()
+
+        # 更新 makeup_request 的關聯
+        makeup_request.attendance_record = record
+        makeup_request.save()
+
+        print(f"補打卡已應用到出勤記錄 #{record.id}")
+
+    except Exception as e:
+        print(f"應用補打卡失敗: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_makeup_requests(request):
+    """
+    查詢我的補打卡申請 API（Phase 1）
+
+    URL: GET /makeup-clock/my-requests/
+    查詢參數：
+    - days: 查詢最近 N 天的記錄（預設 30 天）
+    - status: 過濾狀態（pending, approved, rejected）
+    """
+    try:
+        user = request.user
+
+        # 取得使用者的所有關聯
+        relations = EmpCompanyRel.objects.filter(employee_id=user)
+
+        # 查詢補打卡記錄
+        queryset = MakeupClockRequest.objects.filter(relation_id__in=relations)
+
+        # 過濾天數
+        days = request.query_params.get('days', '30')
+        if days:
+            days = int(days)
+            start_date = datetime.now() - timedelta(days=days)
+            queryset = queryset.filter(created_at__gte=start_date)
+
+        # 過濾狀態
+        req_status = request.query_params.get('status')
+        if req_status:
+            queryset = queryset.filter(status=req_status)
+
+        # 排序
+        queryset = queryset.order_by('-created_at')
+
+        # 序列化
+        serializer = MakeupClockRequestSerializer(queryset, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': queryset.count(),
+                'requests': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢補打卡記錄錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def makeup_clock_quota(request):
+    """
+    查詢我的補打卡額度 API（Phase 1）
+
+    URL: GET /makeup-clock/quota/
+    查詢參數：
+    - year: 年度（預設當前年度）
+    """
+    try:
+        user = request.user
+        year = request.query_params.get('year', datetime.now().year)
+
+        # 查詢或建立額度
+        quota, created = MakeupClockQuota.objects.get_or_create(
+            employee_id=user,
+            year=int(year),
+            defaults={'total_count': 24, 'used_count': 0}
+        )
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'year': int(year),
+                'total_count': quota.total_count,
+                'used_count': quota.used_count,
+                'remaining_count': quota.remaining_count
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢補打卡額度錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_makeup_approvals(request):
+    """
+    查詢待我審批的補打卡申請 API（Phase 1）
+
+    URL: GET /makeup-clock/pending/
+    """
+    try:
+        user = request.user
+
+        # 查詢待審批的記錄
+        approvals = MakeupClockApproval.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).order_by('created_at')
+
+        # 序列化
+        serializer = MakeupClockApprovalSerializer(approvals, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': approvals.count(),
+                'approvals': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢待審批補打卡錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_work_schedule(request):
+    """
+    查詢我的班表 API（Phase 1）
+
+    URL: GET /schedule/my-schedule/
+    """
+    try:
+        user = request.user
+
+        # 取得使用者的關聯
+        relation = EmpCompanyRel.objects.filter(
+            employee_id=user,
+            employment_status=True
+        ).first()
+
+        if not relation:
+            return not_found_response("找不到員工關聯")
+
+        # 取得班表（優先員工專屬，否則使用公司預設）
+        schedule = relation.work_schedule
+        if not schedule:
+            schedule = WorkSchedule.objects.filter(
+                company_id=relation.company_id,
+                is_default=True,
+                is_active=True
+            ).first()
+
+        if not schedule:
+            return success_response(
+                message="尚未設定班表",
+                data=None
+            )
+
+        serializer = WorkScheduleSerializer(schedule)
+
+        return success_response(
+            message="查詢成功",
+            data=serializer.data
+        )
+
+    except Exception as e:
+        print(f"查詢班表錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
 
