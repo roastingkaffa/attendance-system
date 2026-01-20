@@ -615,3 +615,185 @@ class MakeupClockQuota(models.Model):
     def __str__(self):
         return f"{self.employee_id.username} - {self.year} 年 ({self.remaining_count}/{self.total_count})"
 
+
+# =====================================================
+# Phase 2 新增：加班管理模型
+# =====================================================
+
+class OvertimeRecords(models.Model):
+    """加班記錄表 - Phase 2 新增"""
+
+    COMPENSATION_CHOICES = [
+        ('pay', '加班費'),
+        ('compensatory', '補休'),
+        ('mixed', '混合'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', '待審批'),
+        ('approved', '已批准'),
+        ('rejected', '已拒絕'),
+        ('cancelled', '已取消'),
+    ]
+
+    relation_id = models.ForeignKey(
+        EmpCompanyRel,
+        on_delete=models.CASCADE,
+        verbose_name="員工-公司關聯",
+        related_name="overtime_records"
+    )
+    date = models.DateField(verbose_name="加班日期")
+    start_time = models.TimeField(verbose_name="開始時間")
+    end_time = models.TimeField(verbose_name="結束時間")
+    overtime_hours = models.DecimalField(
+        verbose_name="加班時數",
+        max_digits=5,
+        decimal_places=2
+    )
+    reason = models.TextField(verbose_name="加班原因")
+    compensation_type = models.CharField(
+        verbose_name="補償方式",
+        max_length=20,
+        choices=COMPENSATION_CHOICES,
+        default='compensatory'
+    )
+    compensatory_hours = models.DecimalField(
+        verbose_name="補休時數",
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="選擇補休時的時數"
+    )
+    pay_hours = models.DecimalField(
+        verbose_name="加班費時數",
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="選擇加班費的時數"
+    )
+    status = models.CharField(
+        verbose_name="審批狀態",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="申請時間")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新時間")
+
+    class Meta:
+        verbose_name = "加班記錄"
+        verbose_name_plural = "加班記錄"
+        ordering = ['-date', '-created_at']
+        indexes = [
+            models.Index(fields=['relation_id', 'status'], name='overtime_rel_status_idx'),
+            models.Index(fields=['date'], name='overtime_date_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.relation_id.employee_id.username} - {self.date} ({self.overtime_hours}h)"
+
+
+class OvertimeApproval(models.Model):
+    """加班審批記錄 - Phase 2 新增"""
+
+    STATUS_CHOICES = [
+        ('pending', '待審批'),
+        ('approved', '已批准'),
+        ('rejected', '已拒絕'),
+    ]
+
+    overtime_id = models.ForeignKey(
+        OvertimeRecords,
+        on_delete=models.CASCADE,
+        verbose_name="加班記錄",
+        related_name="approvals"
+    )
+    approver_id = models.ForeignKey(
+        Employees,
+        on_delete=models.CASCADE,
+        verbose_name="審批人",
+        related_name="overtime_approvals",
+        to_field="employee_id"
+    )
+    approval_level = models.IntegerField(
+        verbose_name="審批層級",
+        default=1,
+        help_text="1=主管"
+    )
+    status = models.CharField(
+        verbose_name="審批狀態",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    comment = models.TextField(verbose_name="審批意見", blank=True, null=True)
+    approved_at = models.DateTimeField(verbose_name="審批時間", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="建立時間")
+
+    class Meta:
+        verbose_name = "加班審批記錄"
+        verbose_name_plural = "加班審批記錄"
+        ordering = ['approval_level', '-created_at']
+
+    def __str__(self):
+        return f"審批 #{self.id} - {self.overtime_id} ({self.get_status_display()})"
+
+
+# =====================================================
+# Phase 2 新增：通知系統模型
+# =====================================================
+
+class Notifications(models.Model):
+    """通知記錄表 - Phase 2 新增"""
+
+    NOTIFICATION_TYPES = [
+        ('approval_pending', '待審批通知'),
+        ('approval_result', '審批結果通知'),
+        ('leave_balance_warning', '假別額度警告'),
+        ('clock_reminder', '打卡提醒'),
+        ('overtime_reminder', '加班提醒'),
+        ('system', '系統通知'),
+    ]
+
+    recipient_id = models.ForeignKey(
+        Employees,
+        on_delete=models.CASCADE,
+        verbose_name="接收人",
+        related_name="notifications",
+        to_field="employee_id"
+    )
+    notification_type = models.CharField(
+        verbose_name="通知類型",
+        max_length=30,
+        choices=NOTIFICATION_TYPES
+    )
+    title = models.CharField(verbose_name="標題", max_length=200)
+    content = models.TextField(verbose_name="內容")
+    related_model = models.CharField(
+        verbose_name="關聯模型",
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="如：LeaveRecords, OvertimeRecords"
+    )
+    related_id = models.IntegerField(
+        verbose_name="關聯 ID",
+        blank=True,
+        null=True
+    )
+    is_read = models.BooleanField(verbose_name="是否已讀", default=False)
+    read_at = models.DateTimeField(verbose_name="讀取時間", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="建立時間")
+
+    class Meta:
+        verbose_name = "通知"
+        verbose_name_plural = "通知記錄"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient_id', 'is_read'], name='notification_read_idx'),
+            models.Index(fields=['notification_type'], name='notification_type_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.recipient_id.username} - {self.title} ({'已讀' if self.is_read else '未讀'})"
+

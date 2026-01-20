@@ -23,6 +23,18 @@ import leaveService from './services/leaveService';
 import MakeupClockForm from './components/attendance/MakeupClockForm';
 import MakeupClockList from './components/attendance/MakeupClockList';
 import makeupClockService from './services/makeupClockService';
+// Phase 2: 加班管理元件
+import OvertimeForm from './components/overtime/OvertimeForm';
+import OvertimeList from './components/overtime/OvertimeList';
+import OvertimeApprovalList from './components/overtime/OvertimeApprovalList';
+import overtimeService from './services/overtimeService';
+// Phase 2: 報表元件
+import AttendanceSummary from './components/reports/AttendanceSummary';
+import AnomalyList from './components/reports/AnomalyList';
+import AnnualLeaveCalculator from './components/leave/AnnualLeaveCalculator';
+// Phase 2: 通知元件
+import NotificationBell from './components/notifications/NotificationBell';
+import NotificationDropdown from './components/notifications/NotificationDropdown';
 import './App.css';
 
 const App = () => {
@@ -43,10 +55,18 @@ const App = () => {
   const [showLeaveForm, setShowLeaveForm] = useState(false);
   const [leaveBalances, setLeaveBalances] = useState([]);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [reportTab, setReportTab] = useState('summary'); // summary, anomaly, annual
 
   // Phase 1: 補打卡狀態
   const [showMakeupForm, setShowMakeupForm] = useState(false);
   const [makeupQuota, setMakeupQuota] = useState(null);
+
+  // Phase 2: 加班管理狀態
+  const [showOvertimeForm, setShowOvertimeForm] = useState(false);
+  const [overtimeRecords, setOvertimeRecords] = useState([]);
+
+  // Phase 2: 通知狀態
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // 忘記密碼表單
   const [email, setEmail] = useState('');
@@ -63,6 +83,7 @@ const App = () => {
       fetchLeaveRecords();
       fetchLeaveBalances();
       fetchMakeupQuota();
+      fetchOvertimeRecords();
     }
   }, [isAuthenticated, page, userId]);
 
@@ -142,6 +163,19 @@ const App = () => {
   };
 
   /**
+   * 取得加班記錄
+   */
+  const fetchOvertimeRecords = async () => {
+    try {
+      const response = await overtimeService.getMyOvertimeRecords({ days: 30 });
+      console.log('⏰ 加班記錄 API 回應:', response);
+      setOvertimeRecords(response.data?.records || []);
+    } catch (error) {
+      console.error('取得加班記錄失敗:', error);
+    }
+  };
+
+  /**
    * 處理請假申請成功
    */
   const handleLeaveSubmitSuccess = () => {
@@ -159,6 +193,16 @@ const App = () => {
     fetchAttendanceRecords();
     fetchMakeupQuota();
     toast.success('補打卡申請已送出');
+  };
+
+  /**
+   * 處理加班申請成功
+   */
+  const handleOvertimeSubmitSuccess = () => {
+    setShowOvertimeForm(false);
+    fetchOvertimeRecords();
+    fetchLeaveBalances(); // 補休可能會增加
+    toast.success('加班申請已送出');
   };
 
   /**
@@ -271,7 +315,15 @@ const App = () => {
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">禾一系統出勤系統</h1>
-          <div className="flex gap-4">
+          <div className="flex items-center gap-4">
+            {/* 通知鈴鐺 */}
+            <div className="relative">
+              <NotificationBell onClick={() => setShowNotifications(!showNotifications)} />
+              <NotificationDropdown
+                isOpen={showNotifications}
+                onClose={() => setShowNotifications(false)}
+              />
+            </div>
             <Button variant="secondary" onClick={() => setPage('changePassword')}>
               修改密碼
             </Button>
@@ -293,22 +345,21 @@ const App = () => {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
           <Button
             variant="primary"
             size="lg"
             onClick={() => {
               setScanning(true);
-              // TODO: 實作打卡功能（使用 QRCamera）
             }}
-            className="h-32"
+            className="h-28"
           >
-            📷 掃描 QR Code 打卡
+            📷 掃描打卡
           </Button>
           <Button
             variant="success"
             size="lg"
-            className="h-32"
+            className="h-28"
             onClick={() => setShowLeaveForm(true)}
           >
             📝 申請請假
@@ -316,10 +367,18 @@ const App = () => {
           <Button
             variant="warning"
             size="lg"
-            className="h-32"
+            className="h-28"
+            onClick={() => setShowOvertimeForm(true)}
+          >
+            ⏰ 申請加班
+          </Button>
+          <Button
+            variant="secondary"
+            size="lg"
+            className="h-28"
             onClick={() => setShowMakeupForm(true)}
           >
-            🔧 補打卡申請
+            🔧 補打卡
             {makeupQuota && (
               <span className="block text-sm mt-1">
                 剩餘 {makeupQuota.remaining_count} 次
@@ -329,14 +388,8 @@ const App = () => {
           <Button
             variant="outline"
             size="lg"
-            className="h-32"
-            onClick={() => {
-              console.log('🔍 點擊報表按鈕');
-              console.log('📊 出勤記錄:', attendanceRecords);
-              console.log('📋 請假記錄:', leaveRecords);
-              console.log('💰 假別額度:', leaveBalances);
-              setShowReportModal(true);
-            }}
+            className="h-28"
+            onClick={() => setShowReportModal(true)}
           >
             📊 查看報表
           </Button>
@@ -418,6 +471,11 @@ const App = () => {
         <div className="mt-8">
           <MakeupClockList onRefresh={fetchMakeupQuota} />
         </div>
+
+        {/* Overtime List - Phase 2 */}
+        <div className="mt-8">
+          <OvertimeList onRefresh={fetchOvertimeRecords} />
+        </div>
       </main>
 
       {/* QR Scanner Modal */}
@@ -491,123 +549,172 @@ const App = () => {
         </div>
       )}
 
-      {/* Report Modal */}
+      {/* Overtime Form Modal - Phase 2 */}
+      {showOvertimeForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">加班申請</h3>
+              <button
+                onClick={() => setShowOvertimeForm(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+            <OvertimeForm
+              onSuccess={handleOvertimeSubmitSuccess}
+              onCancel={() => setShowOvertimeForm(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Report Modal - Phase 2 Enhanced */}
       {showReportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-200 pb-4">
-              <h3 className="text-2xl font-bold text-gray-900">出勤與請假報表</h3>
+          <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
+            {/* Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <h3 className="text-2xl font-bold text-gray-900">報表中心</h3>
               <button
-                onClick={() => {
-                  console.log('🚪 關閉報表視窗');
-                  setShowReportModal(false);
-                }}
+                onClick={() => setShowReportModal(false)}
                 className="text-gray-500 hover:text-gray-700 text-3xl font-bold leading-none w-8 h-8 flex items-center justify-center"
               >
                 ×
               </button>
             </div>
 
-            <div className="space-y-6">
-              {/* 統計卡片 */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <p className="text-sm text-blue-600 font-medium">本月出勤天數</p>
-                  <p className="text-3xl font-bold text-blue-700 mt-2">
-                    {attendanceRecords.length} 天
-                  </p>
-                </div>
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <p className="text-sm text-green-600 font-medium">本月請假次數</p>
-                  <p className="text-3xl font-bold text-green-700 mt-2">
-                    {leaveRecords.length} 次
-                  </p>
-                </div>
-                <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                  <p className="text-sm text-purple-600 font-medium">剩餘假別時數</p>
-                  <p className="text-3xl font-bold text-purple-700 mt-2">
-                    {leaveBalances.reduce((sum, b) => sum + parseFloat(b.remaining_hours || 0), 0).toFixed(1)} 小時
-                  </p>
-                </div>
-              </div>
+            {/* Tabs */}
+            <div className="flex border-b border-gray-200 px-6">
+              <button
+                onClick={() => setReportTab('summary')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  reportTab === 'summary'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                出勤摘要
+              </button>
+              <button
+                onClick={() => setReportTab('anomaly')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  reportTab === 'anomaly'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                異常清單
+              </button>
+              <button
+                onClick={() => setReportTab('annual')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  reportTab === 'annual'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                特休資格
+              </button>
+              <button
+                onClick={() => setReportTab('balance')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  reportTab === 'balance'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                假別額度
+              </button>
+            </div>
 
-              {/* 假別額度詳細 */}
-              <div className="bg-white border border-gray-200 rounded-lg p-6">
-                <h4 className="text-lg font-semibold mb-4">假別額度明細</h4>
-                <div className="space-y-3">
-                  {leaveBalances.length > 0 ? (
-                    leaveBalances.map((balance) => (
-                      <div key={balance.id} className="flex justify-between items-center border-b border-gray-100 pb-3">
-                        <div>
-                          <p className="font-medium">{balance.leave_type_display}</p>
-                          <p className="text-sm text-gray-500">
-                            總額: {balance.total_hours}h | 已用: {balance.used_hours}h
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-bold text-blue-600">{balance.remaining_hours}h</p>
-                          <p className="text-xs text-gray-500">剩餘</p>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-gray-500 text-center py-4">無假別額度資料</p>
-                  )}
-                </div>
-              </div>
-
-              {/* 最近出勤記錄 */}
-              <div className="bg-white border border-gray-200 rounded-lg p-6">
-                <h4 className="text-lg font-semibold mb-4">最近出勤記錄</h4>
-                {attendanceRecords.length > 0 ? (
-                  <div className="space-y-2">
-                    {attendanceRecords.slice(0, 5).map((record) => (
-                      <div key={record.id} className="flex justify-between items-center text-sm border-b border-gray-100 pb-2">
-                        <span className="font-medium">{record.date}</span>
-                        <span className="text-gray-600">
-                          {record.checkin_time ? new Date(record.checkin_time).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                          {' ~ '}
-                          {record.checkout_time ? new Date(record.checkout_time).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                        </span>
-                        <span className="font-medium text-blue-600">{record.work_hours || 0}h</span>
-                      </div>
-                    ))}
+            {/* Content */}
+            <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 140px)' }}>
+              {reportTab === 'summary' && <AttendanceSummary />}
+              {reportTab === 'anomaly' && <AnomalyList />}
+              {reportTab === 'annual' && <AnnualLeaveCalculator />}
+              {reportTab === 'balance' && (
+                <div className="space-y-6">
+                  {/* 統計卡片 */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <p className="text-sm text-blue-600 font-medium">本月出勤天數</p>
+                      <p className="text-3xl font-bold text-blue-700 mt-2">
+                        {attendanceRecords.length} 天
+                      </p>
+                    </div>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <p className="text-sm text-green-600 font-medium">本月請假次數</p>
+                      <p className="text-3xl font-bold text-green-700 mt-2">
+                        {leaveRecords.length} 次
+                      </p>
+                    </div>
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                      <p className="text-sm text-purple-600 font-medium">剩餘假別時數</p>
+                      <p className="text-3xl font-bold text-purple-700 mt-2">
+                        {leaveBalances.reduce((sum, b) => sum + parseFloat(b.remaining_hours || 0), 0).toFixed(1)} 小時
+                      </p>
+                    </div>
                   </div>
-                ) : (
-                  <p className="text-gray-500 text-center py-4">無出勤記錄</p>
-                )}
-              </div>
 
-              {/* 最近請假記錄 */}
-              <div className="bg-white border border-gray-200 rounded-lg p-6">
-                <h4 className="text-lg font-semibold mb-4">最近請假記錄</h4>
-                {leaveRecords.length > 0 ? (
-                  <div className="space-y-2">
-                    {leaveRecords.slice(0, 5).map((record) => (
-                      <div key={record.id} className="flex justify-between items-center text-sm border-b border-gray-100 pb-2">
-                        <div>
-                          <p className="font-medium">{record.leave_type_display}</p>
-                          <p className="text-xs text-gray-500">
-                            {new Date(record.start_time).toLocaleDateString('zh-TW')} - {new Date(record.end_time).toLocaleDateString('zh-TW')}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            record.status === 'approved' ? 'bg-green-100 text-green-700' :
-                            record.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                            'bg-yellow-100 text-yellow-700'
-                          }`}>
-                            {record.status_display}
-                          </span>
-                          <p className="text-xs text-gray-500 mt-1">{record.leave_hours}h</p>
-                        </div>
-                      </div>
-                    ))}
+                  {/* 假別額度詳細 */}
+                  <div className="bg-white border border-gray-200 rounded-lg p-6">
+                    <h4 className="text-lg font-semibold mb-4">假別額度明細</h4>
+                    <div className="space-y-3">
+                      {leaveBalances.length > 0 ? (
+                        leaveBalances.map((balance) => (
+                          <div key={balance.id} className="flex justify-between items-center border-b border-gray-100 pb-3">
+                            <div>
+                              <p className="font-medium">{balance.leave_type_display}</p>
+                              <p className="text-sm text-gray-500">
+                                總額: {balance.total_hours}h | 已用: {balance.used_hours}h
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-2xl font-bold text-blue-600">{balance.remaining_hours}h</p>
+                              <p className="text-xs text-gray-500">剩餘</p>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-center py-4">無假別額度資料</p>
+                      )}
+                    </div>
                   </div>
-                ) : (
-                  <p className="text-gray-500 text-center py-4">無請假記錄</p>
-                )}
-              </div>
+
+                  {/* 最近請假記錄 */}
+                  <div className="bg-white border border-gray-200 rounded-lg p-6">
+                    <h4 className="text-lg font-semibold mb-4">最近請假記錄</h4>
+                    {leaveRecords.length > 0 ? (
+                      <div className="space-y-2">
+                        {leaveRecords.slice(0, 5).map((record) => (
+                          <div key={record.id} className="flex justify-between items-center text-sm border-b border-gray-100 pb-2">
+                            <div>
+                              <p className="font-medium">{record.leave_type_display}</p>
+                              <p className="text-xs text-gray-500">
+                                {new Date(record.start_time).toLocaleDateString('zh-TW')} - {new Date(record.end_time).toLocaleDateString('zh-TW')}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                record.status === 'approved' ? 'bg-green-100 text-green-700' :
+                                record.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                                'bg-yellow-100 text-yellow-700'
+                              }`}>
+                                {record.status_display}
+                              </span>
+                              <p className="text-xs text-gray-500 mt-1">{record.leave_hours}h</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-gray-500 text-center py-4">無請假記錄</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

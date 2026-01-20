@@ -8,7 +8,9 @@ from .models import (
     AttendanceRecords, ApprovalRecords, LeaveBalances,
     ManagerialRelationship, ApprovalPolicy,
     # Phase 1 新增
-    WorkSchedule, MakeupClockRequest, MakeupClockApproval, MakeupClockQuota
+    WorkSchedule, MakeupClockRequest, MakeupClockApproval, MakeupClockQuota,
+    # Phase 2 新增
+    OvertimeRecords, OvertimeApproval, Notifications
 )
 
 class DateRangeForm(forms.Form):
@@ -485,3 +487,52 @@ class MakeupClockQuotaAdmin(admin.ModelAdmin):
         return f"{obj.employee_id.username} ({obj.employee_id.employee_id})"
     employee_display.short_description = '員工'
 
+
+# =====================================================
+# Phase 2 新增：加班管理 Admin
+# =====================================================
+
+@admin.register(OvertimeRecords)
+class OvertimeRecordsAdmin(admin.ModelAdmin):
+    """加班記錄管理"""
+    list_display = ('id', 'employee_display', 'date', 'start_time', 'end_time',
+                    'overtime_hours', 'compensation_type', 'status', 'created_at')
+    list_filter = ('status', 'compensation_type', 'date')
+    search_fields = ['relation_id__employee_id__username', 'relation_id__employee_id__employee_id']
+    readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'date'
+
+    def employee_display(self, obj):
+        return f"{obj.relation_id.employee_id.username} ({obj.relation_id.employee_id.employee_id})"
+    employee_display.short_description = '員工'
+
+
+@admin.register(OvertimeApproval)
+class OvertimeApprovalAdmin(admin.ModelAdmin):
+    """加班審批記錄管理"""
+    list_display = ('id', 'overtime_id', 'approver_display', 'approval_level', 'status', 'approved_at')
+    list_filter = ('status', 'approval_level')
+    search_fields = ['overtime_id__relation_id__employee_id__username', 'approver_id__username']
+    readonly_fields = ('created_at',)
+
+    def approver_display(self, obj):
+        return f"{obj.approver_id.username} ({obj.approver_id.employee_id})"
+    approver_display.short_description = '審批人'
+
+
+# =====================================================
+# Phase 2 新增：通知系統 Admin
+# =====================================================
+
+@admin.register(Notifications)
+class NotificationsAdmin(admin.ModelAdmin):
+    """通知記錄管理"""
+    list_display = ('id', 'recipient_display', 'notification_type', 'title', 'is_read', 'created_at')
+    list_filter = ('notification_type', 'is_read', 'created_at')
+    search_fields = ['recipient_id__username', 'title', 'content']
+    readonly_fields = ('created_at',)
+    date_hierarchy = 'created_at'
+
+    def recipient_display(self, obj):
+        return f"{obj.recipient_id.username} ({obj.recipient_id.employee_id})"
+    recipient_display.short_description = '接收人'

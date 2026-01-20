@@ -1633,3 +1633,880 @@ def my_work_schedule(request):
         print(f"查詢班表錯誤: {str(e)}")
         return server_error_response("查詢失敗，請稍後再試")
 
+
+# =====================================================
+# Phase 2 新增：加班管理 API
+# =====================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def apply_overtime(request):
+    """
+    申請加班 API
+
+    URL: POST /overtime/apply/
+    請求參數：
+    - date: 加班日期 (YYYY-MM-DD)
+    - start_time: 開始時間 (HH:MM)
+    - end_time: 結束時間 (HH:MM)
+    - reason: 加班原因
+    - compensation_type: 補償方式 (pay/compensatory/mixed)
+    - compensatory_hours: 補休時數（選填，compensation_type 為 compensatory 或 mixed 時）
+    - pay_hours: 加班費時數（選填，compensation_type 為 pay 或 mixed 時）
+    """
+    try:
+        user = request.user
+        data = request.data
+
+        # 1. 驗證必填欄位
+        required_fields = ['date', 'start_time', 'end_time', 'reason']
+        for field in required_fields:
+            if not data.get(field):
+                return validation_error_response(f"缺少必填欄位：{field}")
+
+        # 2. 取得員工關聯
+        relation = EmpCompanyRel.objects.filter(
+            employee_id=user,
+            employment_status=True
+        ).first()
+
+        if not relation:
+            return not_found_response("找不到員工關聯")
+
+        # 3. 解析日期和時間
+        try:
+            ot_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+            start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+            end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+        except ValueError:
+            return validation_error_response("日期或時間格式錯誤")
+
+        # 4. 計算加班時數
+        start_dt = datetime.combine(ot_date, start_time)
+        end_dt = datetime.combine(ot_date, end_time)
+        if end_dt <= start_dt:
+            # 跨日加班
+            end_dt = end_dt + timedelta(days=1)
+        overtime_hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
+
+        # 5. 取得補償方式
+        compensation_type = data.get('compensation_type', 'compensatory')
+        if compensation_type not in ['pay', 'compensatory', 'mixed']:
+            compensation_type = 'compensatory'
+
+        # 計算補休和加班費時數
+        if compensation_type == 'compensatory':
+            compensatory_hours = overtime_hours
+            pay_hours = Decimal('0')
+        elif compensation_type == 'pay':
+            compensatory_hours = Decimal('0')
+            pay_hours = overtime_hours
+        else:  # mixed
+            compensatory_hours = Decimal(str(data.get('compensatory_hours', 0)))
+            pay_hours = Decimal(str(data.get('pay_hours', 0)))
+            if compensatory_hours + pay_hours != overtime_hours:
+                compensatory_hours = overtime_hours
+                pay_hours = Decimal('0')
+
+        # 6. 建立加班記錄
+        overtime_record = OvertimeRecords.objects.create(
+            relation_id=relation,
+            date=ot_date,
+            start_time=start_time,
+            end_time=end_time,
+            overtime_hours=overtime_hours,
+            reason=data['reason'],
+            compensation_type=compensation_type,
+            compensatory_hours=compensatory_hours,
+            pay_hours=pay_hours,
+            status='pending'
+        )
+
+        # 7. 建立審批記錄（直屬主管）
+        approver = relation.direct_manager
+        if not approver:
+            approver = Employees.objects.filter(employee_id__startswith='MGR').first()
+        if not approver:
+            approver = request.user
+
+        approval = OvertimeApproval.objects.create(
+            overtime_id=overtime_record,
+            approver_id=approver,
+            approval_level=1,
+            status='pending'
+        )
+
+        # 8. 建立通知
+        Notifications.objects.create(
+            recipient_id=approver,
+            notification_type='approval_pending',
+            title='新加班申請待審批',
+            content=f'{user.username} 申請 {ot_date} 加班 {overtime_hours} 小時',
+            related_model='OvertimeRecords',
+            related_id=overtime_record.id
+        )
+
+        return success_response(
+            message="加班申請已提交",
+            data={
+                'id': overtime_record.id,
+                'date': str(overtime_record.date),
+                'start_time': str(overtime_record.start_time),
+                'end_time': str(overtime_record.end_time),
+                'overtime_hours': float(overtime_record.overtime_hours),
+                'compensation_type': overtime_record.get_compensation_type_display(),
+                'status': overtime_record.get_status_display(),
+                'approval': {
+                    'id': approval.id,
+                    'approver': approver.username
+                }
+            },
+            status_code=status.HTTP_201_CREATED
+        )
+
+    except Exception as e:
+        print(f"加班申請錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("加班申請失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_overtime_records(request):
+    """
+    查詢我的加班記錄 API
+
+    URL: GET /overtime/my-records/
+    查詢參數：
+    - status: 狀態篩選（選填）
+    - days: 查詢天數（選填，預設 30）
+    """
+    try:
+        user = request.user
+        status_filter = request.query_params.get('status')
+        days = int(request.query_params.get('days', 30))
+
+        # 取得員工關聯
+        relations = EmpCompanyRel.objects.filter(
+            employee_id=user
+        ).values_list('id', flat=True)
+
+        # 查詢加班記錄
+        queryset = OvertimeRecords.objects.filter(
+            relation_id__in=relations
+        )
+
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        # 時間篩選
+        start_date = timezone.now().date() - timedelta(days=days)
+        queryset = queryset.filter(date__gte=start_date)
+
+        serializer = OvertimeRecordsSerializer(queryset, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': queryset.count(),
+                'records': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢加班記錄錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def approve_overtime(request, approval_id):
+    """
+    批准加班申請 API
+
+    URL: POST /overtime/approve/<approval_id>/
+    請求參數：
+    - comment: 審批意見（選填）
+    """
+    try:
+        # 1. 取得審批記錄
+        try:
+            approval = OvertimeApproval.objects.get(id=approval_id)
+        except OvertimeApproval.DoesNotExist:
+            return not_found_response("審批記錄不存在")
+
+        # 2. 驗證權限
+        if approval.approver_id.employee_id != request.user.employee_id:
+            return forbidden_response("您沒有權限審批此申請")
+
+        # 3. 檢查審批狀態
+        if approval.status != 'pending':
+            return error_response(
+                f"此審批已{approval.get_status_display()}",
+                code="INVALID_STATUS",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 更新審批記錄
+        approval.status = 'approved'
+        approval.comment = request.data.get('comment', '')
+        approval.approved_at = timezone.now()
+        approval.save()
+
+        # 5. 更新加班記錄狀態
+        overtime = approval.overtime_id
+        overtime.status = 'approved'
+        overtime.save()
+
+        # 6. 更新補休額度（如果選擇補休）
+        if overtime.compensatory_hours > 0:
+            employee = overtime.relation_id.employee_id
+            year = overtime.date.year
+
+            # 取得或建立補休額度
+            balance, created = LeaveBalances.objects.get_or_create(
+                employee_id=employee,
+                year=year,
+                leave_type='compensatory',
+                defaults={
+                    'total_hours': Decimal('0'),
+                    'used_hours': Decimal('0'),
+                    'remaining_hours': Decimal('0')
+                }
+            )
+            balance.total_hours += overtime.compensatory_hours
+            balance.remaining_hours = balance.total_hours - balance.used_hours
+            balance.save()
+
+        # 7. 建立通知
+        applicant = overtime.relation_id.employee_id
+        Notifications.objects.create(
+            recipient_id=applicant,
+            notification_type='approval_result',
+            title='加班申請已批准',
+            content=f'您 {overtime.date} 的加班申請已獲批准',
+            related_model='OvertimeRecords',
+            related_id=overtime.id
+        )
+
+        return success_response(
+            message="已批准加班申請",
+            data={
+                'overtime_id': overtime.id,
+                'status': overtime.get_status_display(),
+                'compensatory_hours_added': float(overtime.compensatory_hours)
+            }
+        )
+
+    except Exception as e:
+        print(f"批准加班錯誤: {str(e)}")
+        return server_error_response("操作失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reject_overtime(request, approval_id):
+    """
+    拒絕加班申請 API
+
+    URL: POST /overtime/reject/<approval_id>/
+    請求參數：
+    - comment: 拒絕原因（必填）
+    """
+    try:
+        comment = request.data.get('comment')
+        if not comment:
+            return validation_error_response("請填寫拒絕原因")
+
+        # 1. 取得審批記錄
+        try:
+            approval = OvertimeApproval.objects.get(id=approval_id)
+        except OvertimeApproval.DoesNotExist:
+            return not_found_response("審批記錄不存在")
+
+        # 2. 驗證權限
+        if approval.approver_id.employee_id != request.user.employee_id:
+            return forbidden_response("您沒有權限審批此申請")
+
+        # 3. 檢查審批狀態
+        if approval.status != 'pending':
+            return error_response(
+                f"此審批已{approval.get_status_display()}",
+                code="INVALID_STATUS",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 更新審批記錄
+        approval.status = 'rejected'
+        approval.comment = comment
+        approval.approved_at = timezone.now()
+        approval.save()
+
+        # 5. 更新加班記錄狀態
+        overtime = approval.overtime_id
+        overtime.status = 'rejected'
+        overtime.save()
+
+        # 6. 建立通知
+        applicant = overtime.relation_id.employee_id
+        Notifications.objects.create(
+            recipient_id=applicant,
+            notification_type='approval_result',
+            title='加班申請已拒絕',
+            content=f'您 {overtime.date} 的加班申請已被拒絕。原因：{comment}',
+            related_model='OvertimeRecords',
+            related_id=overtime.id
+        )
+
+        return success_response(
+            message="已拒絕加班申請",
+            data={
+                'overtime_id': overtime.id,
+                'status': overtime.get_status_display()
+            }
+        )
+
+    except Exception as e:
+        print(f"拒絕加班錯誤: {str(e)}")
+        return server_error_response("操作失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_overtime_approvals(request):
+    """
+    查詢待審批的加班申請（主管用）
+
+    URL: GET /overtime/pending/
+    """
+    try:
+        user = request.user
+
+        # 查詢待審批記錄
+        approvals = OvertimeApproval.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).select_related('overtime_id')
+
+        serializer = OvertimeApprovalSerializer(approvals, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': approvals.count(),
+                'approvals': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢待審批加班錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cancel_overtime(request, overtime_id):
+    """
+    取消加班申請 API
+
+    URL: POST /overtime/cancel/<overtime_id>/
+    """
+    try:
+        user = request.user
+
+        # 1. 取得加班記錄
+        try:
+            overtime = OvertimeRecords.objects.get(id=overtime_id)
+        except OvertimeRecords.DoesNotExist:
+            return not_found_response("加班記錄不存在")
+
+        # 2. 驗證權限（只能取消自己的申請）
+        if overtime.relation_id.employee_id.employee_id != user.employee_id:
+            return forbidden_response("您只能取消自己的申請")
+
+        # 3. 檢查狀態（只能取消待審批的申請）
+        if overtime.status != 'pending':
+            return error_response(
+                f"此申請已{overtime.get_status_display()}，無法取消",
+                code="INVALID_STATUS",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 更新狀態
+        overtime.status = 'cancelled'
+        overtime.save()
+
+        # 更新審批記錄
+        OvertimeApproval.objects.filter(
+            overtime_id=overtime,
+            status='pending'
+        ).update(status='rejected', comment='申請人已取消')
+
+        return success_response(
+            message="已取消加班申請",
+            data={'overtime_id': overtime.id}
+        )
+
+    except Exception as e:
+        print(f"取消加班錯誤: {str(e)}")
+        return server_error_response("操作失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 2 新增：特休自動計算 API
+# =====================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def annual_leave_entitlement(request):
+    """
+    查詢特休資格明細 API
+
+    URL: GET /leave/annual-entitlement/
+    """
+    try:
+        from .utils import calculate_annual_leave_days
+
+        user = request.user
+
+        # 取得員工關聯（取得入職日期）
+        relation = EmpCompanyRel.objects.filter(
+            employee_id=user,
+            employment_status=True
+        ).first()
+
+        if not relation:
+            return not_found_response("找不到員工關聯")
+
+        if not relation.hire_date:
+            return error_response(
+                "尚未設定入職日期",
+                code="NO_HIRE_DATE",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 計算特休
+        result = calculate_annual_leave_days(relation.hire_date)
+
+        # 取得今年已使用的特休
+        year = timezone.now().year
+        balance = LeaveBalances.objects.filter(
+            employee_id=user,
+            year=year,
+            leave_type='annual'
+        ).first()
+
+        used_hours = float(balance.used_hours) if balance else 0
+        total_hours = result['hours']
+        remaining_hours = total_hours - used_hours
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'hire_date': str(relation.hire_date),
+                'seniority': {
+                    'years': result['years'],
+                    'months': result['months']
+                },
+                'annual_leave': {
+                    'days': result['days'],
+                    'hours': total_hours,
+                    'used_hours': used_hours,
+                    'remaining_hours': max(0, remaining_hours),
+                    'description': result['description']
+                }
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢特休資格錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def calculate_annual_leave(request):
+    """
+    計算並更新特休額度 API
+
+    URL: POST /leave/calculate-annual/
+    請求參數：
+    - year: 年度（選填，預設今年）
+    """
+    try:
+        from .utils import calculate_annual_leave_days
+
+        user = request.user
+        year = int(request.data.get('year', timezone.now().year))
+
+        # 取得員工關聯
+        relation = EmpCompanyRel.objects.filter(
+            employee_id=user,
+            employment_status=True
+        ).first()
+
+        if not relation:
+            return not_found_response("找不到員工關聯")
+
+        if not relation.hire_date:
+            return error_response(
+                "尚未設定入職日期",
+                code="NO_HIRE_DATE",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 計算特休
+        result = calculate_annual_leave_days(relation.hire_date)
+        total_hours = Decimal(str(result['hours']))
+
+        # 更新或建立假別額度
+        balance, created = LeaveBalances.objects.get_or_create(
+            employee_id=user,
+            year=year,
+            leave_type='annual',
+            defaults={
+                'total_hours': total_hours,
+                'used_hours': Decimal('0'),
+                'remaining_hours': total_hours
+            }
+        )
+
+        if not created:
+            # 更新總額度（保留已使用時數）
+            balance.total_hours = total_hours
+            balance.remaining_hours = total_hours - balance.used_hours
+            balance.save()
+
+        return success_response(
+            message="特休額度已更新" if not created else "特休額度已建立",
+            data={
+                'year': year,
+                'total_hours': float(balance.total_hours),
+                'used_hours': float(balance.used_hours),
+                'remaining_hours': float(balance.remaining_hours),
+                'calculation': {
+                    'seniority_years': result['years'],
+                    'seniority_months': result['months'],
+                    'annual_leave_days': result['days'],
+                    'description': result['description']
+                }
+            }
+        )
+
+    except Exception as e:
+        print(f"計算特休錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("計算失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 2 新增：出勤報表 API
+# =====================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def attendance_summary(request):
+    """
+    個人出勤摘要 API
+
+    URL: GET /reports/attendance-summary/
+    查詢參數：
+    - year: 年度（選填，預設今年）
+    - month: 月份（選填，預設當月）
+    """
+    try:
+        user = request.user
+        year = int(request.query_params.get('year', timezone.now().year))
+        month = int(request.query_params.get('month', timezone.now().month))
+
+        # 取得員工關聯
+        relations = EmpCompanyRel.objects.filter(
+            employee_id=user
+        ).values_list('id', flat=True)
+
+        # 計算日期範圍
+        from calendar import monthrange
+        _, last_day = monthrange(year, month)
+        start_date = date(year, month, 1)
+        end_date = date(year, month, last_day)
+
+        # 查詢出勤記錄
+        records = AttendanceRecords.objects.filter(
+            relation_id__in=relations,
+            date__gte=start_date,
+            date__lte=end_date
+        )
+
+        # 統計
+        total_records = records.count()
+        late_records = records.filter(is_late=True)
+        early_leave_records = records.filter(is_early_leave=True)
+        makeup_records = records.filter(is_makeup=True)
+
+        late_count = late_records.count()
+        late_minutes_total = sum(r.late_minutes for r in late_records)
+        early_leave_count = early_leave_records.count()
+        early_leave_minutes_total = sum(r.early_leave_minutes for r in early_leave_records)
+
+        # 計算總工時
+        total_work_hours = sum(
+            float(r.work_hours or 0) for r in records
+        )
+
+        # 查詢請假時數
+        leave_hours = LeaveRecords.objects.filter(
+            relation_id__in=relations,
+            start_time__year=year,
+            start_time__month=month,
+            status='approved'
+        ).aggregate(total=models.Sum('leave_hours'))['total'] or 0
+
+        # 查詢加班時數
+        overtime_hours = OvertimeRecords.objects.filter(
+            relation_id__in=relations,
+            date__year=year,
+            date__month=month,
+            status='approved'
+        ).aggregate(total=models.Sum('overtime_hours'))['total'] or 0
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'period': {
+                    'year': year,
+                    'month': month,
+                    'start_date': str(start_date),
+                    'end_date': str(end_date)
+                },
+                'attendance': {
+                    'total_days': total_records,
+                    'late_count': late_count,
+                    'late_minutes_total': late_minutes_total,
+                    'early_leave_count': early_leave_count,
+                    'early_leave_minutes_total': early_leave_minutes_total,
+                    'makeup_count': makeup_records.count(),
+                    'total_work_hours': round(total_work_hours, 2)
+                },
+                'leave': {
+                    'total_hours': float(leave_hours)
+                },
+                'overtime': {
+                    'total_hours': float(overtime_hours)
+                }
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢出勤摘要錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def anomaly_list(request):
+    """
+    出勤異常清單 API
+
+    URL: GET /reports/anomaly-list/
+    查詢參數：
+    - year: 年度（選填）
+    - month: 月份（選填）
+    - type: 異常類型（late/early_leave/all，預設 all）
+    """
+    try:
+        user = request.user
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
+        anomaly_type = request.query_params.get('type', 'all')
+
+        # 取得員工關聯
+        relations = EmpCompanyRel.objects.filter(
+            employee_id=user
+        ).values_list('id', flat=True)
+
+        # 查詢異常記錄
+        queryset = AttendanceRecords.objects.filter(
+            relation_id__in=relations
+        )
+
+        if anomaly_type == 'late':
+            queryset = queryset.filter(is_late=True)
+        elif anomaly_type == 'early_leave':
+            queryset = queryset.filter(is_early_leave=True)
+        else:
+            queryset = queryset.filter(
+                models.Q(is_late=True) | models.Q(is_early_leave=True)
+            )
+
+        if year:
+            queryset = queryset.filter(date__year=int(year))
+        if month:
+            queryset = queryset.filter(date__month=int(month))
+
+        # 排序
+        queryset = queryset.order_by('-date')[:50]
+
+        # 整理結果
+        anomalies = []
+        for record in queryset:
+            anomaly_info = {
+                'id': record.id,
+                'date': str(record.date),
+                'checkin_time': str(record.checkin_time) if record.checkin_time else None,
+                'checkout_time': str(record.checkout_time) if record.checkout_time else None,
+                'anomalies': []
+            }
+            if record.is_late:
+                anomaly_info['anomalies'].append({
+                    'type': 'late',
+                    'description': f'遲到 {record.late_minutes} 分鐘'
+                })
+            if record.is_early_leave:
+                anomaly_info['anomalies'].append({
+                    'type': 'early_leave',
+                    'description': f'早退 {record.early_leave_minutes} 分鐘'
+                })
+            anomalies.append(anomaly_info)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': len(anomalies),
+                'anomalies': anomalies
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢異常清單錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 2 新增：通知系統 API
+# =====================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_notifications(request):
+    """
+    取得通知列表 API
+
+    URL: GET /notifications/
+    查詢參數：
+    - unread_only: 只顯示未讀（true/false，預設 false）
+    - limit: 數量限制（預設 20）
+    """
+    try:
+        user = request.user
+        unread_only = request.query_params.get('unread_only', 'false').lower() == 'true'
+        limit = int(request.query_params.get('limit', 20))
+
+        queryset = Notifications.objects.filter(recipient_id=user)
+
+        if unread_only:
+            queryset = queryset.filter(is_read=False)
+
+        queryset = queryset.order_by('-created_at')[:limit]
+
+        serializer = NotificationsSerializer(queryset, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': queryset.count(),
+                'notifications': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢通知錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def unread_notification_count(request):
+    """
+    取得未讀通知數量 API
+
+    URL: GET /notifications/unread-count/
+    """
+    try:
+        user = request.user
+        count = Notifications.objects.filter(
+            recipient_id=user,
+            is_read=False
+        ).count()
+
+        return success_response(
+            message="查詢成功",
+            data={'unread_count': count}
+        )
+
+    except Exception as e:
+        print(f"查詢未讀數量錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notification_read(request, notification_id):
+    """
+    標記通知為已讀 API
+
+    URL: POST /notifications/mark-read/<notification_id>/
+    """
+    try:
+        user = request.user
+
+        try:
+            notification = Notifications.objects.get(
+                id=notification_id,
+                recipient_id=user
+            )
+        except Notifications.DoesNotExist:
+            return not_found_response("通知不存在")
+
+        notification.is_read = True
+        notification.read_at = timezone.now()
+        notification.save()
+
+        return success_response(
+            message="已標記為已讀",
+            data={'notification_id': notification.id}
+        )
+
+    except Exception as e:
+        print(f"標記已讀錯誤: {str(e)}")
+        return server_error_response("操作失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_all_notifications_read(request):
+    """
+    標記所有通知為已讀 API
+
+    URL: POST /notifications/mark-all-read/
+    """
+    try:
+        user = request.user
+
+        updated = Notifications.objects.filter(
+            recipient_id=user,
+            is_read=False
+        ).update(
+            is_read=True,
+            read_at=timezone.now()
+        )
+
+        return success_response(
+            message=f"已標記 {updated} 則通知為已讀",
+            data={'updated_count': updated}
+        )
+
+    except Exception as e:
+        print(f"標記全部已讀錯誤: {str(e)}")
+        return server_error_response("操作失敗，請稍後再試")

@@ -39,6 +39,28 @@ urlpatterns = [
 
     # Phase 1：班表 API
     path('schedule/my-schedule/', views.my_work_schedule, name='my_work_schedule'),
+
+    # Phase 2：加班管理 API
+    path('overtime/apply/', views.apply_overtime, name='apply_overtime'),
+    path('overtime/my-records/', views.my_overtime_records, name='my_overtime_records'),
+    path('overtime/approve/<int:approval_id>/', views.approve_overtime, name='approve_overtime'),
+    path('overtime/reject/<int:approval_id>/', views.reject_overtime, name='reject_overtime'),
+    path('overtime/pending/', views.pending_overtime_approvals, name='pending_overtime_approvals'),
+    path('overtime/cancel/<int:overtime_id>/', views.cancel_overtime, name='cancel_overtime'),
+
+    # Phase 2：特休計算 API
+    path('leave/annual-entitlement/', views.annual_leave_entitlement, name='annual_leave_entitlement'),
+    path('leave/calculate-annual/', views.calculate_annual_leave, name='calculate_annual_leave'),
+
+    # Phase 2：出勤報表 API
+    path('reports/attendance-summary/', views.attendance_summary, name='attendance_summary'),
+    path('reports/anomaly-list/', views.anomaly_list, name='anomaly_list'),
+
+    # Phase 2：通知系統 API
+    path('notifications/', views.get_notifications, name='get_notifications'),
+    path('notifications/unread-count/', views.unread_notification_count, name='unread_notification_count'),
+    path('notifications/mark-read/<int:notification_id>/', views.mark_notification_read, name='mark_notification_read'),
+    path('notifications/mark-all-read/', views.mark_all_notifications_read, name='mark_all_notifications_read'),
 ]
 
 urlpatterns += router.urls

@@ -212,3 +212,73 @@ class MakeupClockQuotaSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['remaining_count', 'updated_at']
 
+
+# =====================================================
+# Phase 2 新增：加班管理序列化器
+# =====================================================
+
+class OvertimeRecordsSerializer(serializers.ModelSerializer):
+    """加班記錄序列化器"""
+
+    compensation_type_display = serializers.CharField(source='get_compensation_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    employee_name = serializers.SerializerMethodField()
+    employee_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OvertimeRecords
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at', 'status']
+
+    def get_employee_name(self, obj):
+        try:
+            return obj.relation_id.employee_id.username
+        except:
+            return None
+
+    def get_employee_id(self, obj):
+        try:
+            return obj.relation_id.employee_id.employee_id
+        except:
+            return None
+
+
+class OvertimeApprovalSerializer(serializers.ModelSerializer):
+    """加班審批記錄序列化器"""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    approver_name = serializers.CharField(source='approver_id.username', read_only=True)
+    overtime_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OvertimeApproval
+        fields = '__all__'
+        read_only_fields = ['created_at', 'approved_at']
+
+    def get_overtime_info(self, obj):
+        ot = obj.overtime_id
+        return {
+            'id': ot.id,
+            'date': str(ot.date),
+            'start_time': str(ot.start_time),
+            'end_time': str(ot.end_time),
+            'overtime_hours': float(ot.overtime_hours),
+            'reason': ot.reason,
+            'compensation_type': ot.get_compensation_type_display(),
+            'applicant': ot.relation_id.employee_id.username,
+        }
+
+
+# =====================================================
+# Phase 2 新增：通知系統序列化器
+# =====================================================
+
+class NotificationsSerializer(serializers.ModelSerializer):
+    """通知序列化器"""
+
+    notification_type_display = serializers.CharField(source='get_notification_type_display', read_only=True)
+
+    class Meta:
+        model = Notifications
+        fields = '__all__'
+        read_only_fields = ['created_at']
