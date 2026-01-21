@@ -10,7 +10,9 @@ from .models import (
     # Phase 1 新增
     WorkSchedule, MakeupClockRequest, MakeupClockApproval, MakeupClockQuota,
     # Phase 2 新增
-    OvertimeRecords, OvertimeApproval, Notifications
+    OvertimeRecords, OvertimeApproval, Notifications,
+    # Phase 3 新增
+    Departments
 )
 
 class DateRangeForm(forms.Form):
@@ -20,9 +22,22 @@ class DateRangeForm(forms.Form):
 
 @admin.register(Employees)  # 這樣 Django Admin 就能識別 Employees 模型
 class EmployeesAdmin(admin.ModelAdmin):
-    list_display = ('employee_id', 'username', 'phone', 'address')  # 顯示欄位
+    # Phase 3 更新：顯示角色和部門欄位
+    list_display = ('employee_id', 'username', 'role', 'department', 'phone', 'is_active')
+    list_filter = ('role', 'department', 'is_active')
+    search_fields = ['employee_id', 'username', 'email']
 
-    search_fields = ['employee_id', 'username']
+    fieldsets = (
+        ('基本資訊', {
+            'fields': ('employee_id', 'username', 'email', 'phone', 'address')
+        }),
+        ('角色與部門', {
+            'fields': ('role', 'department')
+        }),
+        ('帳戶狀態', {
+            'fields': ('is_active', 'is_staff', 'is_superuser')
+        }),
+    )
 
 
 @admin.register(Companies)
@@ -536,3 +551,39 @@ class NotificationsAdmin(admin.ModelAdmin):
     def recipient_display(self, obj):
         return f"{obj.recipient_id.username} ({obj.recipient_id.employee_id})"
     recipient_display.short_description = '接收人'
+
+
+# =====================================================
+# Phase 3 新增：部門管理 Admin
+# =====================================================
+
+@admin.register(Departments)
+class DepartmentsAdmin(admin.ModelAdmin):
+    """部門管理"""
+    list_display = ('id', 'name', 'company_id', 'manager_display', 'parent_department', 'employee_count', 'is_active')
+    list_filter = ('company_id', 'is_active')
+    search_fields = ['name', 'company_id__name', 'manager__username']
+    readonly_fields = ('created_at', 'updated_at')
+
+    fieldsets = (
+        ('基本資訊', {
+            'fields': ('name', 'company_id', 'description', 'is_active')
+        }),
+        ('組織架構', {
+            'fields': ('manager', 'parent_department')
+        }),
+        ('時間戳記', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def manager_display(self, obj):
+        if obj.manager:
+            return f"{obj.manager.username} ({obj.manager.employee_id})"
+        return '-'
+    manager_display.short_description = '部門主管'
+
+    def employee_count(self, obj):
+        return obj.get_employee_count()
+    employee_count.short_description = '員工數'

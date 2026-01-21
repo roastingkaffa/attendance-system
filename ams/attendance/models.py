@@ -4,11 +4,37 @@ from datetime import time
 from decimal import Decimal
 
 
+# Phase 3 新增：角色選項
+ROLE_CHOICES = [
+    ('employee', '一般員工'),
+    ('manager', '部門主管'),
+    ('hr_admin', 'HR 管理員'),
+    ('ceo', '總經理'),
+    ('system_admin', '系統管理員'),
+]
+
+
 class Employees(AbstractUser):
     employee_id = models.CharField(verbose_name="員工編號", max_length=20, unique=True, primary_key=True)
     phone = models.TextField(verbose_name="員工電話", blank=True, null=True)
     address = models.TextField(verbose_name="員工地址", blank=True, null=True)
     email = models.EmailField(verbose_name="員工電子郵件", blank=True, null=True)
+
+    # Phase 3 新增：角色與部門
+    role = models.CharField(
+        verbose_name="角色",
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='employee'
+    )
+    department = models.ForeignKey(
+        'Departments',
+        on_delete=models.SET_NULL,
+        verbose_name="所屬部門",
+        related_name="employees",
+        null=True,
+        blank=True
+    )
 
     # 設定 employee_id 作為唯一識別
     USERNAME_FIELD = 'employee_id'
@@ -19,6 +45,37 @@ class Employees(AbstractUser):
 
     def __str__(self):
         return self.employee_id
+
+    def get_permissions(self):
+        """取得角色對應的權限"""
+        permissions = {
+            'view_own_attendance': True,
+            'apply_leave': True,
+            'apply_overtime': True,
+            'apply_makeup': True,
+            'view_department_attendance': self.role in ['manager', 'hr_admin', 'ceo', 'system_admin'],
+            'approve_subordinates': self.role in ['manager', 'hr_admin', 'ceo', 'system_admin'],
+            'batch_approve': self.role in ['manager', 'hr_admin', 'ceo', 'system_admin'],
+            'manage_employees': self.role in ['hr_admin', 'ceo', 'system_admin'],
+            'manage_leave_balances': self.role in ['hr_admin', 'ceo', 'system_admin'],
+            'manage_departments': self.role in ['hr_admin', 'ceo', 'system_admin'],
+            'manage_policies': self.role in ['hr_admin', 'ceo', 'system_admin'],
+            'export_data': self.role in ['manager', 'hr_admin', 'ceo', 'system_admin'],
+            'system_admin': self.role == 'system_admin',
+        }
+        return permissions
+
+    def is_manager_of(self, employee):
+        """檢查是否為某員工的主管"""
+        # 檢查直屬主管關係
+        relations = EmpCompanyRel.objects.filter(employee_id=employee)
+        for rel in relations:
+            if rel.direct_manager == self:
+                return True
+        # 檢查部門主管關係
+        if self.role == 'manager' and self.department and employee.department == self.department:
+            return True
+        return False
         
 
 class Companies(models.Model):
@@ -38,6 +95,78 @@ class Companies(models.Model):
 
     class Meta:
         verbose_name_plural = "公司"
+
+
+# =====================================================
+# Phase 3 新增：部門管理模型
+# =====================================================
+
+class Departments(models.Model):
+    """部門模型 - Phase 3 新增"""
+
+    name = models.CharField(
+        verbose_name="部門名稱",
+        max_length=100
+    )
+    company_id = models.ForeignKey(
+        Companies,
+        on_delete=models.CASCADE,
+        verbose_name="所屬公司",
+        related_name="departments"
+    )
+    manager = models.ForeignKey(
+        'Employees',
+        on_delete=models.SET_NULL,
+        verbose_name="部門主管",
+        related_name="managed_departments",
+        null=True,
+        blank=True
+    )
+    parent_department = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        verbose_name="上級部門",
+        related_name="sub_departments",
+        null=True,
+        blank=True
+    )
+    description = models.TextField(
+        verbose_name="部門描述",
+        blank=True,
+        null=True
+    )
+    is_active = models.BooleanField(
+        verbose_name="是否啟用",
+        default=True
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="建立時間"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name="更新時間"
+    )
+
+    class Meta:
+        verbose_name = "部門"
+        verbose_name_plural = "部門"
+        ordering = ['company_id', 'name']
+        unique_together = ['company_id', 'name']
+        indexes = [
+            models.Index(fields=['company_id', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.company_id.name} - {self.name}"
+
+    def get_all_employees(self):
+        """取得部門內所有員工"""
+        return self.employees.filter(is_active=True)
+
+    def get_employee_count(self):
+        """取得部門員工數量"""
+        return self.employees.count()
 
 
 class WorkSchedule(models.Model):

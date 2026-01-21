@@ -61,6 +61,31 @@ urlpatterns = [
     path('notifications/unread-count/', views.unread_notification_count, name='unread_notification_count'),
     path('notifications/mark-read/<int:notification_id>/', views.mark_notification_read, name='mark_notification_read'),
     path('notifications/mark-all-read/', views.mark_all_notifications_read, name='mark_all_notifications_read'),
+
+    # Phase 3：使用者資訊與角色權限 API
+    path('user/profile/', views.user_profile, name='user_profile'),
+
+    # Phase 3：主管儀表板 API
+    path('manager/dashboard/', views.manager_dashboard, name='manager_dashboard'),
+    path('manager/reports/department/', views.department_report, name='department_report'),
+    path('approval/batch/', views.batch_approve, name='batch_approve'),
+
+    # Phase 3：HR 管理 API
+    path('hr/employees/', views.hr_employee_list, name='hr_employee_list'),
+    path('hr/employees/create/', views.hr_create_employee, name='hr_create_employee'),
+    path('hr/employees/<str:employee_id>/', views.hr_update_employee, name='hr_update_employee'),
+    path('hr/employees/<str:employee_id>/assign-manager/', views.hr_assign_manager, name='hr_assign_manager'),
+    path('hr/leave-balances/batch-set/', views.hr_batch_set_leave_balances, name='hr_batch_set_leave_balances'),
+
+    # Phase 3：部門管理 API
+    path('hr/departments/', views.department_list, name='department_list'),
+    path('hr/departments/create/', views.department_create, name='department_create'),
+    path('hr/departments/<int:department_id>/', views.department_update, name='department_update'),
+    path('hr/departments/<int:department_id>/delete/', views.department_delete, name='department_delete'),
+
+    # Phase 3：資料匯出 API
+    path('export/attendance/', views.export_attendance, name='export_attendance'),
+    path('export/leave/', views.export_leave, name='export_leave'),
 ]
 
 urlpatterns += router.urls

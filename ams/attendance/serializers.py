@@ -282,3 +282,139 @@ class NotificationsSerializer(serializers.ModelSerializer):
         model = Notifications
         fields = '__all__'
         read_only_fields = ['created_at']
+
+
+# =====================================================
+# Phase 3 新增：部門與使用者資訊序列化器
+# =====================================================
+
+class DepartmentsSerializer(serializers.ModelSerializer):
+    """部門序列化器"""
+
+    company_name = serializers.CharField(source='company_id.name', read_only=True)
+    manager_name = serializers.SerializerMethodField()
+    parent_department_name = serializers.CharField(
+        source='parent_department.name',
+        read_only=True,
+        allow_null=True
+    )
+    employee_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Departments
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_manager_name(self, obj):
+        if obj.manager:
+            return obj.manager.username
+        return None
+
+    def get_employee_count(self, obj):
+        return obj.get_employee_count()
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    """使用者資訊序列化器（含角色與權限）"""
+
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    department_name = serializers.SerializerMethodField()
+    department_info = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
+    company_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Employees
+        fields = [
+            'employee_id', 'username', 'email', 'phone', 'address',
+            'role', 'role_display', 'department', 'department_name',
+            'department_info', 'permissions', 'company_info',
+            'is_active', 'date_joined', 'last_login'
+        ]
+
+    def get_department_name(self, obj):
+        if obj.department:
+            return obj.department.name
+        return None
+
+    def get_department_info(self, obj):
+        if obj.department:
+            return {
+                'id': obj.department.id,
+                'name': obj.department.name,
+                'company_id': obj.department.company_id.id,
+                'company_name': obj.department.company_id.name,
+            }
+        return None
+
+    def get_permissions(self, obj):
+        return obj.get_permissions()
+
+    def get_company_info(self, obj):
+        # 從 EmpCompanyRel 取得公司資訊
+        relations = EmpCompanyRel.objects.filter(
+            employee_id=obj,
+            employment_status=True
+        ).select_related('company_id')
+        companies = []
+        for rel in relations:
+            companies.append({
+                'relation_id': rel.id,
+                'company_id': rel.company_id.id,
+                'company_name': rel.company_id.name,
+                'hire_date': str(rel.hire_date) if rel.hire_date else None,
+                'direct_manager': rel.direct_manager.employee_id if rel.direct_manager else None,
+                'direct_manager_name': rel.direct_manager.username if rel.direct_manager else None,
+            })
+        return companies
+
+
+class EmployeeListSerializer(serializers.ModelSerializer):
+    """員工列表序列化器（用於 HR 管理）"""
+
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    department_name = serializers.SerializerMethodField()
+    company_name = serializers.SerializerMethodField()
+    hire_date = serializers.SerializerMethodField()
+    direct_manager_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Employees
+        fields = [
+            'employee_id', 'username', 'email', 'phone',
+            'role', 'role_display', 'department', 'department_name',
+            'company_name', 'hire_date', 'direct_manager_name',
+            'is_active', 'date_joined'
+        ]
+
+    def get_department_name(self, obj):
+        if obj.department:
+            return obj.department.name
+        return None
+
+    def get_company_name(self, obj):
+        rel = EmpCompanyRel.objects.filter(
+            employee_id=obj,
+            employment_status=True
+        ).first()
+        if rel:
+            return rel.company_id.name
+        return None
+
+    def get_hire_date(self, obj):
+        rel = EmpCompanyRel.objects.filter(
+            employee_id=obj,
+            employment_status=True
+        ).first()
+        if rel and rel.hire_date:
+            return str(rel.hire_date)
+        return None
+
+    def get_direct_manager_name(self, obj):
+        rel = EmpCompanyRel.objects.filter(
+            employee_id=obj,
+            employment_status=True
+        ).first()
+        if rel and rel.direct_manager:
+            return rel.direct_manager.username
+        return None

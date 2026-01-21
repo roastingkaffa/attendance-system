@@ -1,7 +1,6 @@
 /**
  * App.jsx - 主應用程式元件（重構版）
- * 從 744 行重構至 < 200 行
- * 使用 Context API 和元件化設計
+ * Phase 3 增強：整合角色權限系統
  */
 import React, { useState, useEffect } from 'react';
 import { toast, Toaster } from 'sonner';
@@ -35,10 +34,29 @@ import AnnualLeaveCalculator from './components/leave/AnnualLeaveCalculator';
 // Phase 2: 通知元件
 import NotificationBell from './components/notifications/NotificationBell';
 import NotificationDropdown from './components/notifications/NotificationDropdown';
+// Phase 3: 主管與 HR 元件
+import RoleGuard, { ManagerOnly, HROnly, CanExport } from './components/common/RoleGuard';
+import ManagerDashboard from './components/manager/ManagerDashboard';
+import BatchApproval from './components/manager/BatchApproval';
+import DepartmentReport from './components/manager/DepartmentReport';
+import EmployeeManagement from './components/hr/EmployeeManagement';
+import ExportModal from './components/export/ExportModal';
 import './App.css';
 
 const App = () => {
-  const { isAuthenticated, userId, relationId, logout, forgotPassword } = useAuth();
+  const {
+    isAuthenticated,
+    userId,
+    relationId,
+    logout,
+    forgotPassword,
+    // Phase 3 新增
+    role,
+    getRoleDisplay,
+    isManager,
+    isHR,
+    userProfile,
+  } = useAuth();
 
   // 頁面狀態
   const [page, setPage] = useState(isAuthenticated ? 'dashboard' : 'login');
@@ -67,6 +85,12 @@ const App = () => {
 
   // Phase 2: 通知狀態
   const [showNotifications, setShowNotifications] = useState(false);
+
+  // Phase 3: 主管與 HR 功能狀態
+  const [showManagerModal, setShowManagerModal] = useState(false);
+  const [managerTab, setManagerTab] = useState('dashboard'); // dashboard, batch, report
+  const [showHRModal, setShowHRModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // 忘記密碼表單
   const [email, setEmail] = useState('');
@@ -316,6 +340,33 @@ const App = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">禾一系統出勤系統</h1>
           <div className="flex items-center gap-4">
+            {/* Phase 3：主管功能按鈕 */}
+            {isManager() && (
+              <Button
+                variant="outline"
+                onClick={() => setShowManagerModal(true)}
+              >
+                主管功能
+              </Button>
+            )}
+            {/* Phase 3：HR 功能按鈕 */}
+            {isHR() && (
+              <Button
+                variant="outline"
+                onClick={() => setShowHRModal(true)}
+              >
+                HR 管理
+              </Button>
+            )}
+            {/* Phase 3：匯出按鈕 */}
+            {isManager() && (
+              <Button
+                variant="outline"
+                onClick={() => setShowExportModal(true)}
+              >
+                匯出
+              </Button>
+            )}
             {/* 通知鈴鐺 */}
             <div className="relative">
               <NotificationBell onClick={() => setShowNotifications(!showNotifications)} />
@@ -338,10 +389,34 @@ const App = () => {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* User Info */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">歡迎，{userId}</h2>
-          <p className="text-gray-600">
-            GPS 狀態: {gps ? `✅ (${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)})` : '❌ 未取得'}
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold mb-2">
+                歡迎，{userProfile?.username || userId}
+              </h2>
+              <div className="flex items-center gap-3">
+                <span className={`px-2 py-1 text-xs rounded-full ${
+                  role === 'employee' ? 'bg-gray-100 text-gray-700' :
+                  role === 'manager' ? 'bg-blue-100 text-blue-700' :
+                  role === 'hr_admin' ? 'bg-purple-100 text-purple-700' :
+                  role === 'ceo' ? 'bg-red-100 text-red-700' :
+                  'bg-yellow-100 text-yellow-700'
+                }`}>
+                  {getRoleDisplay()}
+                </span>
+                {userProfile?.department_name && (
+                  <span className="text-sm text-gray-500">
+                    {userProfile.department_name}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-gray-600">
+                GPS 狀態: {gps ? `✅ (${gps.lat.toFixed(4)}, ${gps.lng.toFixed(4)})` : '❌ 未取得'}
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Quick Actions */}
@@ -718,6 +793,93 @@ const App = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Phase 3：主管功能 Modal */}
+      {showManagerModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
+            {/* Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <h3 className="text-2xl font-bold text-gray-900">主管功能</h3>
+              <button
+                onClick={() => setShowManagerModal(false)}
+                className="text-gray-500 hover:text-gray-700 text-3xl font-bold leading-none w-8 h-8 flex items-center justify-center"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-gray-200 px-6">
+              <button
+                onClick={() => setManagerTab('dashboard')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  managerTab === 'dashboard'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                出勤總覽
+              </button>
+              <button
+                onClick={() => setManagerTab('batch')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  managerTab === 'batch'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                批次審批
+              </button>
+              <button
+                onClick={() => setManagerTab('report')}
+                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  managerTab === 'report'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                部門報表
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 140px)' }}>
+              {managerTab === 'dashboard' && <ManagerDashboard />}
+              {managerTab === 'batch' && <BatchApproval onSuccess={fetchAttendanceRecords} />}
+              {managerTab === 'report' && <DepartmentReport />}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 3：HR 管理 Modal */}
+      {showHRModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
+            {/* Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <h3 className="text-2xl font-bold text-gray-900">HR 管理</h3>
+              <button
+                onClick={() => setShowHRModal(false)}
+                className="text-gray-500 hover:text-gray-700 text-3xl font-bold leading-none w-8 h-8 flex items-center justify-center"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 100px)' }}>
+              <EmployeeManagement />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 3：匯出 Modal */}
+      {showExportModal && (
+        <ExportModal onClose={() => setShowExportModal(false)} />
       )}
     </div>
   );

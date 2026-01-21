@@ -2510,3 +2510,1243 @@ def mark_all_notifications_read(request):
     except Exception as e:
         print(f"標記全部已讀錯誤: {str(e)}")
         return server_error_response("操作失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 3 新增：使用者資訊與角色權限 API
+# =====================================================
+
+from .serializers import UserProfileSerializer, DepartmentsSerializer, EmployeeListSerializer
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_profile(request):
+    """
+    取得當前使用者完整資訊（含角色、權限）
+
+    URL: GET /api/user/profile/
+    """
+    try:
+        user = request.user
+        serializer = UserProfileSerializer(user)
+
+        return success_response(
+            message="查詢成功",
+            data=serializer.data
+        )
+
+    except Exception as e:
+        print(f"取得使用者資訊錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 3 新增：主管儀表板 API
+# =====================================================
+
+def _check_manager_permission(user):
+    """檢查是否有主管權限"""
+    return user.role in ['manager', 'hr_admin', 'ceo', 'system_admin']
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def manager_dashboard(request):
+    """
+    主管儀表板 - 部門出勤總覽
+
+    URL: GET /api/manager/dashboard/
+    查詢參數：
+    - date: 查詢日期（預設今天）
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_manager_permission(user):
+            return forbidden_response("您沒有權限存取此功能")
+
+        # 取得查詢日期
+        date_str = request.query_params.get('date')
+        if date_str:
+            query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        else:
+            query_date = date.today()
+
+        # 取得下屬員工
+        subordinates = _get_subordinates(user)
+        subordinate_ids = [e.employee_id for e in subordinates]
+
+        # 取得下屬的關聯 ID
+        relations = EmpCompanyRel.objects.filter(
+            employee_id__in=subordinate_ids,
+            employment_status=True
+        )
+        relation_ids = relations.values_list('id', flat=True)
+
+        # 統計出勤資訊
+        attendance_records = AttendanceRecords.objects.filter(
+            relation_id__in=relation_ids,
+            date=query_date
+        )
+
+        # 統計數據
+        total_employees = len(subordinates)
+        checked_in = attendance_records.count()
+        late_count = attendance_records.filter(is_late=True).count()
+        early_leave_count = attendance_records.filter(is_early_leave=True).count()
+
+        # 取得待審批數量
+        pending_leave = ApprovalRecords.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).count()
+
+        pending_overtime = OvertimeApproval.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).count()
+
+        pending_makeup = MakeupClockApproval.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).count()
+
+        # 取得未打卡員工
+        checked_in_employees = set(
+            AttendanceRecords.objects.filter(
+                relation_id__in=relation_ids,
+                date=query_date
+            ).values_list('relation_id__employee_id', flat=True)
+        )
+        not_checked_in = [
+            {'employee_id': e.employee_id, 'username': e.username}
+            for e in subordinates
+            if e.employee_id not in checked_in_employees
+        ]
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'date': str(query_date),
+                'summary': {
+                    'total_employees': total_employees,
+                    'checked_in': checked_in,
+                    'not_checked_in': total_employees - checked_in,
+                    'late_count': late_count,
+                    'early_leave_count': early_leave_count,
+                },
+                'pending_approvals': {
+                    'leave': pending_leave,
+                    'overtime': pending_overtime,
+                    'makeup': pending_makeup,
+                    'total': pending_leave + pending_overtime + pending_makeup,
+                },
+                'not_checked_in_list': not_checked_in[:10],  # 最多顯示 10 人
+            }
+        )
+
+    except Exception as e:
+        print(f"主管儀表板錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+def _get_subordinates(manager):
+    """取得主管的下屬員工"""
+    from .models import Departments
+
+    subordinates = set()
+
+    # 1. 從 EmpCompanyRel 的 direct_manager 取得直屬下屬
+    direct_reports = EmpCompanyRel.objects.filter(
+        direct_manager=manager,
+        employment_status=True
+    ).select_related('employee_id')
+    for rel in direct_reports:
+        subordinates.add(rel.employee_id)
+
+    # 2. 如果是部門主管，取得部門內所有員工
+    if manager.department:
+        dept_employees = Employees.objects.filter(
+            department=manager.department,
+            is_active=True
+        ).exclude(employee_id=manager.employee_id)
+        subordinates.update(dept_employees)
+
+    # 3. 如果是 HR 或 CEO，取得所有員工
+    if manager.role in ['hr_admin', 'ceo', 'system_admin']:
+        all_employees = Employees.objects.filter(is_active=True)
+        subordinates.update(all_employees)
+
+    return list(subordinates)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def department_report(request):
+    """
+    部門員工出勤統計
+
+    URL: GET /api/manager/reports/department/
+    查詢參數：
+    - year: 年份
+    - month: 月份
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_manager_permission(user):
+            return forbidden_response("您沒有權限存取此功能")
+
+        year = int(request.query_params.get('year', timezone.now().year))
+        month = int(request.query_params.get('month', timezone.now().month))
+
+        # 計算日期範圍
+        from calendar import monthrange
+        _, last_day = monthrange(year, month)
+        start_date = date(year, month, 1)
+        end_date = date(year, month, last_day)
+
+        # 取得下屬
+        subordinates = _get_subordinates(user)
+        subordinate_ids = [e.employee_id for e in subordinates]
+
+        # 取得關聯
+        relations = EmpCompanyRel.objects.filter(
+            employee_id__in=subordinate_ids,
+            employment_status=True
+        )
+
+        # 統計每個員工的出勤
+        report_data = []
+        for rel in relations:
+            emp = rel.employee_id
+            records = AttendanceRecords.objects.filter(
+                relation_id=rel,
+                date__gte=start_date,
+                date__lte=end_date
+            )
+
+            total_days = records.count()
+            late_count = records.filter(is_late=True).count()
+            early_leave_count = records.filter(is_early_leave=True).count()
+            total_work_hours = sum(float(r.work_hours or 0) for r in records)
+            late_minutes_total = sum(r.late_minutes for r in records.filter(is_late=True))
+
+            # 請假統計
+            leave_hours = LeaveRecords.objects.filter(
+                relation_id=rel,
+                start_time__year=year,
+                start_time__month=month,
+                status='approved'
+            ).aggregate(total=models.Sum('leave_hours'))['total'] or 0
+
+            # 加班統計
+            overtime_hours = OvertimeRecords.objects.filter(
+                relation_id=rel,
+                date__year=year,
+                date__month=month,
+                status='approved'
+            ).aggregate(total=models.Sum('overtime_hours'))['total'] or 0
+
+            report_data.append({
+                'employee_id': emp.employee_id,
+                'username': emp.username,
+                'department': emp.department.name if emp.department else None,
+                'attendance': {
+                    'total_days': total_days,
+                    'late_count': late_count,
+                    'late_minutes_total': late_minutes_total,
+                    'early_leave_count': early_leave_count,
+                    'total_work_hours': round(total_work_hours, 2),
+                },
+                'leave_hours': float(leave_hours),
+                'overtime_hours': float(overtime_hours),
+            })
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'period': {
+                    'year': year,
+                    'month': month,
+                    'start_date': str(start_date),
+                    'end_date': str(end_date),
+                },
+                'employee_count': len(report_data),
+                'employees': report_data,
+            }
+        )
+
+    except Exception as e:
+        print(f"部門報表錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def batch_approve(request):
+    """
+    批次審批 API
+
+    URL: POST /api/approval/batch/
+    請求參數：
+    - approval_type: 審批類型（leave/overtime/makeup）
+    - approval_ids: 審批記錄 ID 陣列
+    - action: 動作（approve/reject）
+    - comment: 審批意見（選填，拒絕時必填）
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_manager_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        approval_type = request.data.get('approval_type')
+        approval_ids = request.data.get('approval_ids', [])
+        action = request.data.get('action')
+        comment = request.data.get('comment', '')
+
+        if not approval_type or not approval_ids or not action:
+            return validation_error_response("缺少必要參數")
+
+        if action not in ['approve', 'reject']:
+            return validation_error_response("無效的操作類型")
+
+        if action == 'reject' and not comment:
+            return validation_error_response("拒絕時必須填寫原因")
+
+        # 根據類型取得對應的審批模型
+        model_map = {
+            'leave': ApprovalRecords,
+            'overtime': OvertimeApproval,
+            'makeup': MakeupClockApproval,
+        }
+
+        if approval_type not in model_map:
+            return validation_error_response("無效的審批類型")
+
+        ApprovalModel = model_map[approval_type]
+
+        # 批次處理
+        processed = []
+        failed = []
+
+        for approval_id in approval_ids:
+            try:
+                approval = ApprovalModel.objects.get(id=approval_id)
+
+                # 檢查權限
+                if approval.approver_id != user:
+                    failed.append({
+                        'id': approval_id,
+                        'reason': '無權限審批'
+                    })
+                    continue
+
+                # 檢查狀態
+                if approval.status != 'pending':
+                    failed.append({
+                        'id': approval_id,
+                        'reason': '已處理過'
+                    })
+                    continue
+
+                # 更新審批記錄
+                approval.status = 'approved' if action == 'approve' else 'rejected'
+                approval.comment = comment
+                approval.approved_at = timezone.now()
+                approval.save()
+
+                # 更新關聯記錄
+                if approval_type == 'leave':
+                    leave = approval.leave_id
+                    if action == 'approve':
+                        leave.status = 'approved'
+                        _deduct_leave_balance(leave)
+                    else:
+                        leave.status = 'rejected'
+                    leave.save()
+                elif approval_type == 'overtime':
+                    overtime = approval.overtime_id
+                    if action == 'approve':
+                        overtime.status = 'approved'
+                        # 更新補休額度
+                        if overtime.compensatory_hours > 0:
+                            employee = overtime.relation_id.employee_id
+                            year = overtime.date.year
+                            balance, _ = LeaveBalances.objects.get_or_create(
+                                employee_id=employee,
+                                year=year,
+                                leave_type='compensatory',
+                                defaults={
+                                    'total_hours': Decimal('0'),
+                                    'used_hours': Decimal('0'),
+                                    'remaining_hours': Decimal('0')
+                                }
+                            )
+                            balance.total_hours += overtime.compensatory_hours
+                            balance.remaining_hours = balance.total_hours - balance.used_hours
+                            balance.save()
+                    else:
+                        overtime.status = 'rejected'
+                    overtime.save()
+                elif approval_type == 'makeup':
+                    makeup_request = approval.request_id
+                    if action == 'approve':
+                        makeup_request.status = 'approved'
+                        _apply_makeup_clock_to_attendance(makeup_request)
+                        # 扣除額度
+                        employee = makeup_request.relation_id.employee_id
+                        current_year = datetime.now().year
+                        try:
+                            quota = MakeupClockQuota.objects.get(
+                                employee_id=employee,
+                                year=current_year
+                            )
+                            quota.used_count += 1
+                            quota.save()
+                        except MakeupClockQuota.DoesNotExist:
+                            pass
+                    else:
+                        makeup_request.status = 'rejected'
+                    makeup_request.save()
+
+                processed.append(approval_id)
+
+            except ApprovalModel.DoesNotExist:
+                failed.append({
+                    'id': approval_id,
+                    'reason': '記錄不存在'
+                })
+
+        return success_response(
+            message=f"批次審批完成：成功 {len(processed)} 筆，失敗 {len(failed)} 筆",
+            data={
+                'processed': processed,
+                'failed': failed,
+            }
+        )
+
+    except Exception as e:
+        print(f"批次審批錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("批次審批失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 3 新增：HR 管理 API
+# =====================================================
+
+def _check_hr_permission(user):
+    """檢查是否有 HR 權限"""
+    return user.role in ['hr_admin', 'ceo', 'system_admin']
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def hr_employee_list(request):
+    """
+    HR 員工列表（分頁、篩選）
+
+    URL: GET /api/hr/employees/
+    查詢參數：
+    - page: 頁碼
+    - page_size: 每頁筆數（預設 20）
+    - search: 搜尋（員工編號、姓名）
+    - department: 部門 ID
+    - role: 角色
+    - is_active: 是否在職
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限存取此功能")
+
+        # 取得參數
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        search = request.query_params.get('search', '')
+        department_id = request.query_params.get('department')
+        role = request.query_params.get('role')
+        is_active = request.query_params.get('is_active')
+
+        # 建立查詢
+        queryset = Employees.objects.all()
+
+        # 搜尋
+        if search:
+            queryset = queryset.filter(
+                Q(employee_id__icontains=search) |
+                Q(username__icontains=search) |
+                Q(email__icontains=search)
+            )
+
+        # 部門篩選
+        if department_id:
+            queryset = queryset.filter(department_id=department_id)
+
+        # 角色篩選
+        if role:
+            queryset = queryset.filter(role=role)
+
+        # 在職篩選
+        if is_active is not None:
+            is_active_bool = is_active.lower() == 'true'
+            queryset = queryset.filter(is_active=is_active_bool)
+
+        # 排序
+        queryset = queryset.order_by('employee_id')
+
+        # 計算總數
+        total = queryset.count()
+
+        # 分頁
+        start = (page - 1) * page_size
+        end = start + page_size
+        employees = queryset[start:end]
+
+        # 序列化
+        serializer = EmployeeListSerializer(employees, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': (total + page_size - 1) // page_size,
+                'employees': serializer.data,
+            }
+        )
+
+    except Exception as e:
+        print(f"員工列表錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def hr_create_employee(request):
+    """
+    HR 新增員工
+
+    URL: POST /api/hr/employees/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        data = request.data
+
+        # 必填欄位
+        required_fields = ['employee_id', 'username', 'password']
+        for field in required_fields:
+            if not data.get(field):
+                return validation_error_response(f"缺少必填欄位：{field}")
+
+        # 檢查員工編號是否重複
+        if Employees.objects.filter(employee_id=data['employee_id']).exists():
+            return error_response(
+                "員工編號已存在",
+                code="DUPLICATE_EMPLOYEE_ID",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 建立員工
+        employee = Employees(
+            employee_id=data['employee_id'],
+            username=data['username'],
+            email=data.get('email'),
+            phone=data.get('phone'),
+            address=data.get('address'),
+            role=data.get('role', 'employee'),
+        )
+        employee.set_password(data['password'])
+
+        # 設定部門
+        if data.get('department'):
+            from .models import Departments
+            try:
+                department = Departments.objects.get(id=data['department'])
+                employee.department = department
+            except Departments.DoesNotExist:
+                pass
+
+        employee.save()
+
+        # 建立員工-公司關聯
+        if data.get('company_id') and data.get('hire_date'):
+            EmpCompanyRel.objects.create(
+                employee_id=employee,
+                company_id_id=data['company_id'],
+                employment_status=True,
+                hire_date=data['hire_date'],
+                direct_manager_id=data.get('direct_manager'),
+            )
+
+        return success_response(
+            message="員工建立成功",
+            data={'employee_id': employee.employee_id},
+            status_code=status.HTTP_201_CREATED
+        )
+
+    except Exception as e:
+        print(f"建立員工錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("建立失敗，請稍後再試")
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def hr_update_employee(request, employee_id):
+    """
+    HR 更新員工資料
+
+    URL: PATCH /api/hr/employees/{employee_id}/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        # 取得員工
+        try:
+            employee = Employees.objects.get(employee_id=employee_id)
+        except Employees.DoesNotExist:
+            return not_found_response("員工不存在")
+
+        data = request.data
+
+        # 更新允許的欄位
+        allowed_fields = ['username', 'email', 'phone', 'address', 'role', 'is_active']
+        for field in allowed_fields:
+            if field in data:
+                setattr(employee, field, data[field])
+
+        # 更新部門
+        if 'department' in data:
+            if data['department']:
+                from .models import Departments
+                try:
+                    department = Departments.objects.get(id=data['department'])
+                    employee.department = department
+                except Departments.DoesNotExist:
+                    pass
+            else:
+                employee.department = None
+
+        # 更新密碼
+        if data.get('password'):
+            employee.set_password(data['password'])
+
+        employee.save()
+
+        return success_response(
+            message="員工資料已更新",
+            data={'employee_id': employee.employee_id}
+        )
+
+    except Exception as e:
+        print(f"更新員工錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("更新失敗，請稍後再試")
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def hr_assign_manager(request, employee_id):
+    """
+    HR 指派主管
+
+    URL: PATCH /api/hr/employees/{employee_id}/assign-manager/
+    請求參數：
+    - manager_id: 主管員工編號
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        manager_id = request.data.get('manager_id')
+        if not manager_id:
+            return validation_error_response("請提供主管員工編號")
+
+        # 取得員工
+        try:
+            employee = Employees.objects.get(employee_id=employee_id)
+        except Employees.DoesNotExist:
+            return not_found_response("員工不存在")
+
+        # 取得主管
+        try:
+            manager = Employees.objects.get(employee_id=manager_id)
+        except Employees.DoesNotExist:
+            return not_found_response("主管不存在")
+
+        # 更新 EmpCompanyRel
+        relations = EmpCompanyRel.objects.filter(
+            employee_id=employee,
+            employment_status=True
+        )
+
+        if not relations.exists():
+            return error_response(
+                "員工尚未建立公司關聯",
+                code="NO_RELATION",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        for rel in relations:
+            rel.direct_manager = manager
+            rel.save()
+
+        return success_response(
+            message="主管指派成功",
+            data={
+                'employee_id': employee_id,
+                'manager_id': manager_id,
+                'manager_name': manager.username
+            }
+        )
+
+    except Exception as e:
+        print(f"指派主管錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("指派失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def hr_batch_set_leave_balances(request):
+    """
+    HR 批次設定假別額度
+
+    URL: POST /api/hr/leave-balances/batch-set/
+    請求參數：
+    - employee_ids: 員工編號陣列
+    - year: 年度
+    - leave_type: 假別
+    - total_hours: 總額度
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        employee_ids = request.data.get('employee_ids', [])
+        year = request.data.get('year', datetime.now().year)
+        leave_type = request.data.get('leave_type')
+        total_hours = request.data.get('total_hours')
+
+        if not employee_ids or not leave_type or total_hours is None:
+            return validation_error_response("缺少必要參數")
+
+        # 批次處理
+        processed = []
+        failed = []
+
+        for emp_id in employee_ids:
+            try:
+                employee = Employees.objects.get(employee_id=emp_id)
+
+                # 更新或建立額度
+                balance, created = LeaveBalances.objects.update_or_create(
+                    employee_id=employee,
+                    year=year,
+                    leave_type=leave_type,
+                    defaults={
+                        'total_hours': Decimal(str(total_hours)),
+                    }
+                )
+                # 重新計算剩餘時數
+                balance.remaining_hours = balance.total_hours - balance.used_hours
+                balance.save()
+
+                processed.append(emp_id)
+
+            except Employees.DoesNotExist:
+                failed.append({
+                    'employee_id': emp_id,
+                    'reason': '員工不存在'
+                })
+
+        return success_response(
+            message=f"批次設定完成：成功 {len(processed)} 筆，失敗 {len(failed)} 筆",
+            data={
+                'processed': processed,
+                'failed': failed,
+            }
+        )
+
+    except Exception as e:
+        print(f"批次設定假別額度錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("設定失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 3 新增：部門管理 API
+# =====================================================
+
+from .models import Departments
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def department_list(request):
+    """
+    部門列表
+
+    URL: GET /api/hr/departments/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限存取此功能")
+
+        company_id = request.query_params.get('company_id')
+
+        queryset = Departments.objects.filter(is_active=True)
+
+        if company_id:
+            queryset = queryset.filter(company_id=company_id)
+
+        serializer = DepartmentsSerializer(queryset, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': queryset.count(),
+                'departments': serializer.data,
+            }
+        )
+
+    except Exception as e:
+        print(f"部門列表錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def department_create(request):
+    """
+    建立部門
+
+    URL: POST /api/hr/departments/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        data = request.data
+
+        if not data.get('name') or not data.get('company_id'):
+            return validation_error_response("缺少必要參數（name, company_id）")
+
+        # 檢查是否重複
+        if Departments.objects.filter(
+            name=data['name'],
+            company_id=data['company_id']
+        ).exists():
+            return error_response(
+                "部門名稱已存在",
+                code="DUPLICATE_DEPARTMENT",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        department = Departments.objects.create(
+            name=data['name'],
+            company_id_id=data['company_id'],
+            manager_id=data.get('manager'),
+            parent_department_id=data.get('parent_department'),
+            description=data.get('description', ''),
+        )
+
+        serializer = DepartmentsSerializer(department)
+
+        return success_response(
+            message="部門建立成功",
+            data=serializer.data,
+            status_code=status.HTTP_201_CREATED
+        )
+
+    except Exception as e:
+        print(f"建立部門錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("建立失敗，請稍後再試")
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def department_update(request, department_id):
+    """
+    更新部門
+
+    URL: PATCH /api/hr/departments/{department_id}/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        try:
+            department = Departments.objects.get(id=department_id)
+        except Departments.DoesNotExist:
+            return not_found_response("部門不存在")
+
+        data = request.data
+
+        # 更新欄位
+        if 'name' in data:
+            department.name = data['name']
+        if 'manager' in data:
+            department.manager_id = data['manager']
+        if 'parent_department' in data:
+            department.parent_department_id = data['parent_department']
+        if 'description' in data:
+            department.description = data['description']
+        if 'is_active' in data:
+            department.is_active = data['is_active']
+
+        department.save()
+
+        serializer = DepartmentsSerializer(department)
+
+        return success_response(
+            message="部門已更新",
+            data=serializer.data
+        )
+
+    except Exception as e:
+        print(f"更新部門錯誤: {str(e)}")
+        return server_error_response("更新失敗，請稍後再試")
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def department_delete(request, department_id):
+    """
+    刪除部門（軟刪除）
+
+    URL: DELETE /api/hr/departments/{department_id}/
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_hr_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        try:
+            department = Departments.objects.get(id=department_id)
+        except Departments.DoesNotExist:
+            return not_found_response("部門不存在")
+
+        # 軟刪除
+        department.is_active = False
+        department.save()
+
+        return success_response(message="部門已刪除")
+
+    except Exception as e:
+        print(f"刪除部門錯誤: {str(e)}")
+        return server_error_response("刪除失敗，請稍後再試")
+
+
+# =====================================================
+# Phase 3 新增：資料匯出 API
+# =====================================================
+
+import csv
+import io
+from django.http import HttpResponse
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def export_attendance(request):
+    """
+    匯出出勤記錄
+
+    URL: POST /api/export/attendance/
+    請求參數：
+    - date_from: 開始日期
+    - date_to: 結束日期
+    - format: 格式（csv/xlsx）
+    - employee_ids: 員工編號陣列（選填，HR 專用）
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_manager_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        date_from = request.data.get('date_from')
+        date_to = request.data.get('date_to')
+        export_format = request.data.get('format', 'csv')
+        employee_ids = request.data.get('employee_ids', [])
+
+        if not date_from or not date_to:
+            return validation_error_response("請提供日期範圍")
+
+        # 解析日期
+        start_date = datetime.strptime(date_from, '%Y-%m-%d').date()
+        end_date = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+        # 取得員工（根據權限）
+        if _check_hr_permission(user) and employee_ids:
+            # HR 可指定員工
+            relations = EmpCompanyRel.objects.filter(
+                employee_id__in=employee_ids,
+                employment_status=True
+            )
+        else:
+            # 主管只能匯出下屬
+            subordinates = _get_subordinates(user)
+            subordinate_ids = [e.employee_id for e in subordinates]
+            relations = EmpCompanyRel.objects.filter(
+                employee_id__in=subordinate_ids,
+                employment_status=True
+            )
+
+        relation_ids = relations.values_list('id', flat=True)
+
+        # 查詢記錄
+        records = AttendanceRecords.objects.filter(
+            relation_id__in=relation_ids,
+            date__gte=start_date,
+            date__lte=end_date
+        ).select_related('relation_id__employee_id').order_by('date', 'relation_id')
+
+        if export_format == 'csv':
+            return _export_attendance_csv(records)
+        elif export_format == 'xlsx':
+            return _export_attendance_xlsx(records)
+        else:
+            return validation_error_response("不支援的匯出格式")
+
+    except Exception as e:
+        print(f"匯出出勤錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return server_error_response("匯出失敗，請稍後再試")
+
+
+def _export_attendance_csv(records):
+    """匯出出勤記錄為 CSV"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # 標題列
+    writer.writerow([
+        '日期', '員工編號', '員工姓名', '上班時間', '下班時間',
+        '工時', '是否遲到', '遲到分鐘', '是否早退', '早退分鐘', '是否補打卡'
+    ])
+
+    # 資料列
+    for record in records:
+        writer.writerow([
+            str(record.date),
+            record.relation_id.employee_id.employee_id,
+            record.relation_id.employee_id.username,
+            str(record.checkin_time) if record.checkin_time else '',
+            str(record.checkout_time) if record.checkout_time else '',
+            str(record.work_hours),
+            '是' if record.is_late else '否',
+            record.late_minutes,
+            '是' if record.is_early_leave else '否',
+            record.early_leave_minutes,
+            '是' if record.is_makeup else '否',
+        ])
+
+    output.seek(0)
+
+    response = HttpResponse(
+        output.read().encode('utf-8-sig'),
+        content_type='text/csv; charset=utf-8-sig'
+    )
+    response['Content-Disposition'] = 'attachment; filename="attendance_export.csv"'
+
+    return response
+
+
+def _export_attendance_xlsx(records):
+    """匯出出勤記錄為 Excel"""
+    try:
+        import openpyxl
+        from openpyxl.utils import get_column_letter
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "出勤記錄"
+
+        # 標題列
+        headers = [
+            '日期', '員工編號', '員工姓名', '上班時間', '下班時間',
+            '工時', '是否遲到', '遲到分鐘', '是否早退', '早退分鐘', '是否補打卡'
+        ]
+        for col, header in enumerate(headers, 1):
+            ws.cell(row=1, column=col, value=header)
+
+        # 資料列
+        for row, record in enumerate(records, 2):
+            ws.cell(row=row, column=1, value=str(record.date))
+            ws.cell(row=row, column=2, value=record.relation_id.employee_id.employee_id)
+            ws.cell(row=row, column=3, value=record.relation_id.employee_id.username)
+            ws.cell(row=row, column=4, value=str(record.checkin_time) if record.checkin_time else '')
+            ws.cell(row=row, column=5, value=str(record.checkout_time) if record.checkout_time else '')
+            ws.cell(row=row, column=6, value=float(record.work_hours))
+            ws.cell(row=row, column=7, value='是' if record.is_late else '否')
+            ws.cell(row=row, column=8, value=record.late_minutes)
+            ws.cell(row=row, column=9, value='是' if record.is_early_leave else '否')
+            ws.cell(row=row, column=10, value=record.early_leave_minutes)
+            ws.cell(row=row, column=11, value='是' if record.is_makeup else '否')
+
+        # 調整列寬
+        for col in range(1, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 15
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        response = HttpResponse(
+            output.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename="attendance_export.xlsx"'
+
+        return response
+
+    except ImportError:
+        return error_response(
+            "伺服器未安裝 openpyxl，請使用 CSV 格式",
+            code="OPENPYXL_NOT_INSTALLED",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def export_leave(request):
+    """
+    匯出請假記錄
+
+    URL: POST /api/export/leave/
+    請求參數：
+    - date_from: 開始日期
+    - date_to: 結束日期
+    - format: 格式（csv/xlsx）
+    """
+    try:
+        user = request.user
+
+        # 權限檢查
+        if not _check_manager_permission(user):
+            return forbidden_response("您沒有權限執行此操作")
+
+        date_from = request.data.get('date_from')
+        date_to = request.data.get('date_to')
+        export_format = request.data.get('format', 'csv')
+
+        if not date_from or not date_to:
+            return validation_error_response("請提供日期範圍")
+
+        # 解析日期
+        start_date = datetime.strptime(date_from, '%Y-%m-%d')
+        end_date = datetime.strptime(date_to, '%Y-%m-%d')
+
+        # 取得員工
+        subordinates = _get_subordinates(user)
+        subordinate_ids = [e.employee_id for e in subordinates]
+        relations = EmpCompanyRel.objects.filter(
+            employee_id__in=subordinate_ids,
+            employment_status=True
+        )
+        relation_ids = relations.values_list('id', flat=True)
+
+        # 查詢記錄
+        records = LeaveRecords.objects.filter(
+            relation_id__in=relation_ids,
+            start_time__gte=start_date,
+            start_time__lte=end_date
+        ).select_related('relation_id__employee_id').order_by('start_time')
+
+        if export_format == 'csv':
+            return _export_leave_csv(records)
+        else:
+            return validation_error_response("目前僅支援 CSV 格式")
+
+    except Exception as e:
+        print(f"匯出請假錯誤: {str(e)}")
+        return server_error_response("匯出失敗，請稍後再試")
+
+
+def _export_leave_csv(records):
+    """匯出請假記錄為 CSV"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # 標題列
+    writer.writerow([
+        '員工編號', '員工姓名', '假別', '開始時間', '結束時間',
+        '請假時數', '狀態', '請假原因'
+    ])
+
+    # 資料列
+    for record in records:
+        writer.writerow([
+            record.relation_id.employee_id.employee_id,
+            record.relation_id.employee_id.username,
+            record.get_leave_type_display(),
+            str(record.start_time),
+            str(record.end_time),
+            str(record.leave_hours),
+            record.get_status_display(),
+            record.leave_reason or '',
+        ])
+
+    output.seek(0)
+
+    response = HttpResponse(
+        output.read().encode('utf-8-sig'),
+        content_type='text/csv; charset=utf-8-sig'
+    )
+    response['Content-Disposition'] = 'attachment; filename="leave_export.csv"'
+
+    return response
