@@ -95,6 +95,15 @@ const leaveService = {
     const response = await apiClient.get(`/leave/detail/${leaveId}/`);
     return response;
   },
+
+  /**
+   * 取得待審批的請假申請（主管用）
+   * @returns {Promise} API 回應
+   */
+  getPendingApprovals: async () => {
+    const response = await apiClient.get('/leave/pending/');
+    return response;
+  },
 };
 
 export default leaveService;

@@ -1099,6 +1099,38 @@ def leave_balances(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def pending_leave_approvals(request):
+    """
+    查詢待審批的請假申請（主管用）
+
+    URL: GET /leave/pending/
+    """
+    try:
+        user = request.user
+
+        # 查詢待審批的請假記錄
+        approvals = ApprovalRecords.objects.filter(
+            approver_id=user,
+            status='pending'
+        ).select_related('leave_id').order_by('created_at')
+
+        serializer = ApprovalRecordsSerializer(approvals, many=True)
+
+        return success_response(
+            message="查詢成功",
+            data={
+                'count': approvals.count(),
+                'approvals': serializer.data
+            }
+        )
+
+    except Exception as e:
+        print(f"查詢待審批請假錯誤: {str(e)}")
+        return server_error_response("查詢失敗，請稍後再試")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def pending_approvals(request):
     """
     查詢待我審批的申請 API（Phase 2 Week 4）

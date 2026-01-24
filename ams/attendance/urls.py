@@ -25,6 +25,7 @@ urlpatterns = [
     path('leave/apply/', views.apply_leave, name='apply_leave'),
     path('leave/my-records/', views.my_leave_records, name='my_leave_records'),
     path('leave/balances/', views.leave_balances, name='leave_balances'),
+    path('leave/pending/', views.pending_leave_approvals, name='pending_leave_approvals'),
     path('approval/approve/<int:approval_id>/', views.approve_leave, name='approve_leave'),
     path('approval/reject/<int:approval_id>/', views.reject_leave, name='reject_leave'),
     path('approval/pending/', views.pending_approvals, name='pending_approvals'),

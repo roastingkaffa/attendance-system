@@ -7,13 +7,10 @@ import api from './api';
 const exportService = {
   /**
    * 匯出出勤記錄
-   * @param {string} dateFrom - 開始日期（YYYY-MM-DD）
-   * @param {string} dateTo - 結束日期（YYYY-MM-DD）
-   * @param {string} format - 格式（csv/xlsx）
-   * @param {string[]} employeeIds - 員工編號陣列（選填，HR 專用）
+   * 注意：api interceptor 已返回 response.data（對於 blob 就是 blob 本身）
    */
   exportAttendance: async (dateFrom, dateTo, format = 'csv', employeeIds = []) => {
-    const response = await api.post('/export/attendance/', {
+    const blobData = await api.post('/export/attendance/', {
       date_from: dateFrom,
       date_to: dateTo,
       format,
@@ -23,7 +20,7 @@ const exportService = {
     });
 
     // 觸發下載
-    const blob = new Blob([response.data], {
+    const blob = new Blob([blobData], {
       type: format === 'xlsx'
         ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         : 'text/csv;charset=utf-8'
@@ -42,12 +39,9 @@ const exportService = {
 
   /**
    * 匯出請假記錄
-   * @param {string} dateFrom - 開始日期
-   * @param {string} dateTo - 結束日期
-   * @param {string} format - 格式
    */
   exportLeave: async (dateFrom, dateTo, format = 'csv') => {
-    const response = await api.post('/export/leave/', {
+    const blobData = await api.post('/export/leave/', {
       date_from: dateFrom,
       date_to: dateTo,
       format
@@ -56,7 +50,7 @@ const exportService = {
     });
 
     // 觸發下載
-    const blob = new Blob([response.data], {
+    const blob = new Blob([blobData], {
       type: 'text/csv;charset=utf-8'
     });
     const url = window.URL.createObjectURL(blob);
