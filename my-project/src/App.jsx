@@ -112,22 +112,73 @@ const App = () => {
   }, [isAuthenticated, page, userId]);
 
   /**
+   * 檢查是否為安全連線 (HTTPS)
+   */
+  const isSecureContext = () => {
+    return window.isSecureContext ||
+           window.location.protocol === 'https:' ||
+           window.location.hostname === 'localhost' ||
+           window.location.hostname === '127.0.0.1';
+  };
+
+  /**
+   * 偵測 iOS 裝置
+   */
+  const isIOS = () => {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  };
+
+  /**
    * 取得 GPS 位置
    */
   const getLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setGps({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-        },
-        () => toast.error('無法取得 GPS 位置，請確認定位權限已開啟')
-      );
-    } else {
-      toast.error('您的瀏覽器不支援定位功能');
+    // iOS 必須使用 HTTPS 才能存取 Geolocation API
+    if (!isSecureContext()) {
+      const message = isIOS()
+        ? 'iOS 裝置需要 HTTPS 連線才能使用定位功能。請使用 https:// 網址存取此頁面。'
+        : '需要安全連線 (HTTPS) 才能使用定位功能。';
+      console.warn('GPS 錯誤:', message);
+      toast.error(message, { duration: 5000 });
+      return;
     }
+
+    if (!navigator.geolocation) {
+      toast.error('您的瀏覽器不支援定位功能');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setGps({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        console.log('GPS 定位成功:', position.coords.latitude, position.coords.longitude);
+      },
+      (error) => {
+        let message = '無法取得 GPS 位置';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            message = isIOS()
+              ? '定位權限被拒絕。請至「設定 > Safari > 位置」允許此網站使用定位服務。'
+              : '定位權限被拒絕。請在瀏覽器設定中允許定位權限。';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            message = '無法取得位置資訊，請確認裝置定位服務已開啟。';
+            break;
+          case error.TIMEOUT:
+            message = '取得位置逾時，請重試。';
+            break;
+        }
+        console.error('GPS 錯誤:', error.code, error.message);
+        toast.error(message, { duration: 5000 });
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000
+      }
+    );
   };
 
   /**

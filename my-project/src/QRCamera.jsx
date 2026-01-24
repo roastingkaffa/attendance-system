@@ -36,8 +36,14 @@ const detectDevice = () => {
   // 檢查是否支援 getUserMedia
   const hasGetUserMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
-  // iOS PWA 不支援 getUserMedia
-  const cameraSupported = hasGetUserMedia && !(isIOS && isPWA) && !isIOSNonSafari;
+  // 檢查是否為安全連線 (HTTPS)
+  const isHttps = window.isSecureContext ||
+                  window.location.protocol === 'https:' ||
+                  window.location.hostname === 'localhost' ||
+                  window.location.hostname === '127.0.0.1';
+
+  // 相機即時掃描需要: HTTPS + getUserMedia + 非 iOS PWA + 非 iOS 非 Safari
+  const cameraSupported = isHttps && hasGetUserMedia && !(isIOS && isPWA) && !isIOSNonSafari;
 
   return {
     isIOS,
@@ -49,6 +55,7 @@ const detectDevice = () => {
     isIOSNonSafari,
     isPWA,
     hasGetUserMedia,
+    isHttps,
     cameraSupported,
   };
 };
@@ -76,31 +83,35 @@ const QRCamera = ({ onScan, onError }) => {
     const info = detectDevice();
     setDeviceInfo(info);
 
-    // 檢查環境
+    // 檢查環境 - HTTPS 是相機功能的必要條件
     if (!isSecureContext()) {
-      setMode('error');
-      setErrorMessage('需要 HTTPS 連線才能使用相機功能。請使用安全連線存取此頁面。');
+      // 在非安全連線下，改用上傳模式而非直接顯示錯誤
+      setMode('upload');
+      const message = info.isIOS
+        ? 'iOS 裝置需要 HTTPS 連線才能使用即時掃描。請使用圖片上傳功能，或改用 https:// 網址存取。'
+        : '需要 HTTPS 連線才能使用即時掃描功能。請使用圖片上傳或改用安全連線。';
+      toast.warning(message, { duration: 6000 });
       return;
     }
 
-    // iOS 非 Safari 瀏覽器
+    // iOS 非 Safari 瀏覽器 (Chrome, Firefox 等)
     if (info.isIOSNonSafari) {
       setMode('upload');
-      toast.info('iOS 裝置請使用 Safari 瀏覽器以獲得最佳體驗，或使用圖片上傳功能');
+      toast.info('iOS 裝置的 Chrome/Firefox 不支援即時掃描，請使用圖片上傳功能，或改用 Safari 瀏覽器。', { duration: 5000 });
       return;
     }
 
     // iOS PWA 模式
     if (info.isIOS && info.isPWA) {
       setMode('upload');
-      toast.info('PWA 模式下請使用圖片上傳功能掃描 QR Code');
+      toast.info('iOS PWA 模式不支援即時掃描，請使用圖片上傳功能。', { duration: 5000 });
       return;
     }
 
     // 不支援 getUserMedia
     if (!info.hasGetUserMedia) {
       setMode('upload');
-      toast.info('您的瀏覽器不支援相機功能，請使用圖片上傳');
+      toast.info('您的瀏覽器不支援相機功能，請使用圖片上傳', { duration: 5000 });
       return;
     }
 
@@ -360,8 +371,20 @@ const QRCamera = ({ onScan, onError }) => {
         {/* 隱藏的 QR 讀取器 */}
         <div id="qr-file-reader" style={{ display: 'none' }}></div>
 
-        {/* 裝置提示 */}
-        {deviceInfo?.isIOSNonSafari && (
+        {/* HTTPS 警告 */}
+        {!isSecureContext() && (
+          <div className="flex items-center gap-2 mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg w-full">
+            <AlertTriangle className="h-5 w-5 text-orange-600 flex-shrink-0" />
+            <p className="text-sm text-orange-700">
+              {deviceInfo?.isIOS
+                ? '目前為非安全連線，無法使用即時掃描。請拍攝 QR Code 照片後上傳。'
+                : '請使用 HTTPS 連線以啟用即時掃描功能。'}
+            </p>
+          </div>
+        )}
+
+        {/* iOS 非 Safari 提示 */}
+        {deviceInfo?.isIOSNonSafari && isSecureContext() && (
           <div className="flex items-center gap-2 mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg w-full">
             <AlertTriangle className="h-5 w-5 text-yellow-600 flex-shrink-0" />
             <p className="text-sm text-yellow-700">
