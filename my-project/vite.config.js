@@ -21,5 +21,14 @@ export default defineConfig({
     port: 5173,
     // 如果有憑證就啟用 HTTPS，否則用 HTTP
     https: httpsConfig,
+    // API 代理設定 - 解決 HTTPS 前端呼叫 HTTP 後端的 Mixed Content 問題
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+        secure: false,
+      },
+    },
   },
 })

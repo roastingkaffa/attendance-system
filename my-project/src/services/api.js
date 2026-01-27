@@ -4,8 +4,10 @@
  */
 import axios from 'axios';
 
-// API Base URL（從環境變數讀取）
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// API Base URL
+// 開發環境使用 /api 代理（解決 HTTPS 前端呼叫 HTTP 後端的 Mixed Content 問題）
+// 生產環境從環境變數讀取
+const BASE_URL = import.meta.env.DEV ? '/api' : (import.meta.env.VITE_API_URL || '');
 
 /**
  * 從 Cookie 中取得 CSRF Token
