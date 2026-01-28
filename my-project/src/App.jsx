@@ -281,6 +281,118 @@ const App = () => {
   };
 
   /**
+   * 解析 QR Code 內容
+   * 支援格式：
+   * 1. JSON: {"latitude": 25.0883, "longitude": 121.5166}
+   * 2. 簡單格式: 25.0883,121.5166
+   */
+  const parseQRCode = (qrContent) => {
+    try {
+      // 嘗試 JSON 格式
+      const json = JSON.parse(qrContent);
+      if (json.latitude && json.longitude) {
+        return { latitude: parseFloat(json.latitude), longitude: parseFloat(json.longitude) };
+      }
+      if (json.lat && json.lng) {
+        return { latitude: parseFloat(json.lat), longitude: parseFloat(json.lng) };
+      }
+    } catch (e) {
+      // 不是 JSON，嘗試其他格式
+    }
+
+    // 嘗試簡單格式: "緯度,經度"
+    const parts = qrContent.split(',');
+    if (parts.length === 2) {
+      const lat = parseFloat(parts[0].trim());
+      const lng = parseFloat(parts[1].trim());
+      if (!isNaN(lat) && !isNaN(lng)) {
+        return { latitude: lat, longitude: lng };
+      }
+    }
+
+    return null;
+  };
+
+  /**
+   * 處理 QR Code 掃描結果
+   */
+  const handleQRCodeScan = async (result) => {
+    console.log('QR Code 掃描結果:', result);
+    setScanning(false);
+
+    // 1. 檢查 GPS 是否可用
+    if (!gps) {
+      toast.error('無法取得您的位置，請確認已開啟定位權限');
+      return;
+    }
+
+    // 2. 解析 QR Code 內容
+    const qrData = parseQRCode(result);
+    if (!qrData) {
+      toast.error('無效的 QR Code 格式');
+      return;
+    }
+
+    // 3. 檢查 relationId 是否可用
+    if (!relationId) {
+      toast.error('無法取得員工資料，請重新登入');
+      return;
+    }
+
+    // 4. 判斷是上班還是下班打卡
+    const todayRecords = attendanceRecords.filter(record => {
+      const recordDate = new Date(record.date).toDateString();
+      const today = new Date().toDateString();
+      return recordDate === today;
+    });
+
+    const hasClockedIn = todayRecords.length > 0 && todayRecords[0].checkin_time;
+    const hasClockedOut = todayRecords.length > 0 && todayRecords[0].checkout_time;
+
+    try {
+      if (!hasClockedIn) {
+        // 上班打卡
+        const response = await attendanceService.clockIn({
+          qr_latitude: qrData.latitude,
+          qr_longitude: qrData.longitude,
+          user_latitude: gps.lat,
+          user_longitude: gps.lng,
+          relation_id: relationId,
+        });
+
+        if (response.success) {
+          toast.success('上班打卡成功！');
+          fetchAttendanceRecords();
+        } else {
+          toast.error(response.error?.message || '打卡失敗');
+        }
+      } else if (!hasClockedOut) {
+        // 下班打卡
+        const recordId = todayRecords[0].id;
+        const response = await attendanceService.clockOut(recordId, {
+          qr_latitude: qrData.latitude,
+          qr_longitude: qrData.longitude,
+          user_latitude: gps.lat,
+          user_longitude: gps.lng,
+        });
+
+        if (response.success) {
+          toast.success('下班打卡成功！');
+          fetchAttendanceRecords();
+        } else {
+          toast.error(response.error?.message || '打卡失敗');
+        }
+      } else {
+        toast.info('您今天已完成上下班打卡');
+      }
+    } catch (error) {
+      console.error('打卡失敗:', error);
+      const errorMessage = error.message || '打卡失敗，請稍後再試';
+      toast.error(errorMessage);
+    }
+  };
+
+  /**
    * 處理登出
    */
   const handleLogout = async () => {
@@ -618,11 +730,7 @@ const App = () => {
               </button>
             </div>
             <QRCamera
-              onScan={(result) => {
-                // TODO: 處理掃描結果，呼叫 attendanceService.clockIn()
-                console.log('QR Code:', result);
-                setScanning(false);
-              }}
+              onScan={handleQRCodeScan}
               onError={(error) => {
                 console.error('QR Scanner error:', error);
                 toast.error('掃描失敗');
