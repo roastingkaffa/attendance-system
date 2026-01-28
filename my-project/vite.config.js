@@ -19,6 +19,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // 允許所有主機（支援 ngrok 等隧道服務）
+    allowedHosts: true,
     // 如果有憑證就啟用 HTTPS，否則用 HTTP
     https: httpsConfig,
     // API 代理設定 - 解決 HTTPS 前端呼叫 HTTP 後端的 Mixed Content 問題
