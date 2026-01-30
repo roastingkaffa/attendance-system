@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import makeupClockService from '../../services/makeupClockService';
 import Button from '../common/Button';
 
-const MakeupClockForm = ({ onSuccess, onCancel, attendanceRecords = [] }) => {
+const MakeupClockForm = ({ relationId, onSuccess, onCancel, attendanceRecords = [] }) => {
   const [formData, setFormData] = useState({
     date: '',
     makeup_type: 'checkin',
@@ -97,20 +97,28 @@ const MakeupClockForm = ({ onSuccess, onCancel, attendanceRecords = [] }) => {
       }
     }
 
+    // 驗證 relationId
+    if (!relationId) {
+      toast.error('無法取得員工資料，請重新登入');
+      return;
+    }
+
     setLoading(true);
     try {
       // 組合日期和時間為 ISO 格式
       const data = {
+        relation_id: parseInt(relationId, 10),
         date: formData.date,
         makeup_type: formData.makeup_type,
         reason: formData.reason,
       };
 
+      // 後端期望 HH:MM 格式，不需要加日期
       if (formData.requested_checkin_time) {
-        data.requested_checkin_time = `${formData.date}T${formData.requested_checkin_time}:00`;
+        data.requested_checkin_time = formData.requested_checkin_time;
       }
       if (formData.requested_checkout_time) {
-        data.requested_checkout_time = `${formData.date}T${formData.requested_checkout_time}:00`;
+        data.requested_checkout_time = formData.requested_checkout_time;
       }
 
       await makeupClockService.apply(data);

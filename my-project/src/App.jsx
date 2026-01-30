@@ -775,6 +775,7 @@ const App = () => {
               </button>
             </div>
             <MakeupClockForm
+              relationId={relationId}
               onSuccess={handleMakeupSubmitSuccess}
               onCancel={() => setShowMakeupForm(false)}
               attendanceRecords={attendanceRecords}

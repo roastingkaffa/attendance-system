@@ -1238,19 +1238,15 @@ def apply_makeup_clock(request):
             date=target_date
         ).first()
 
-        # 7. 處理時間格式
+        # 7. 處理時間格式（使用 naive datetime 避免 SQLite 時區問題）
         requested_checkin_dt = None
         requested_checkout_dt = None
         if requested_checkin:
             checkin_time = datetime.strptime(requested_checkin, '%H:%M').time()
-            requested_checkin_dt = timezone.make_aware(
-                datetime.combine(target_date, checkin_time)
-            )
+            requested_checkin_dt = datetime.combine(target_date, checkin_time)
         if requested_checkout:
             checkout_time = datetime.strptime(requested_checkout, '%H:%M').time()
-            requested_checkout_dt = timezone.make_aware(
-                datetime.combine(target_date, checkout_time)
-            )
+            requested_checkout_dt = datetime.combine(target_date, checkout_time)
 
         # 8. 建立補打卡申請
         makeup_request = MakeupClockRequest.objects.create(
