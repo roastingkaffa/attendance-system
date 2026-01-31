@@ -2,7 +2,12 @@ from django.contrib import admin
 from django.http import HttpResponse
 from django import forms
 from django.shortcuts import render
+from django.urls import path, reverse
+from django.utils.html import format_html
 import openpyxl
+import qrcode
+from io import BytesIO
+import json
 from .models import (
     Employees, Companies, EmpCompanyRel, LeaveRecords,
     AttendanceRecords, ApprovalRecords, LeaveBalances,
@@ -42,7 +47,71 @@ class EmployeesAdmin(admin.ModelAdmin):
 
 @admin.register(Companies)
 class CompaniesAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'address', 'latitude', 'longitude', 'radius')
+    list_display = ('id', 'name', 'address', 'latitude', 'longitude', 'radius', 'qr_code_download')
+
+    def get_urls(self):
+        """新增自訂 URL 路由"""
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                '<int:company_id>/qrcode/',
+                self.admin_site.admin_view(self.download_qrcode),
+                name='company-qrcode-download',
+            ),
+        ]
+        return custom_urls + urls
+
+    def qr_code_download(self, obj):
+        """在列表中顯示下載 QR Code 連結"""
+        url = reverse('admin:company-qrcode-download', args=[obj.id])
+        return format_html(
+            '<a href="{}" class="button" style="padding: 5px 10px; background: #417690; color: white; '
+            'text-decoration: none; border-radius: 4px;">📥 下載 QR Code</a>',
+            url
+        )
+    qr_code_download.short_description = 'QR Code'
+    qr_code_download.allow_tags = True
+
+    def download_qrcode(self, request, company_id):
+        """產生並下載 QR Code 圖檔"""
+        try:
+            company = Companies.objects.get(id=company_id)
+        except Companies.DoesNotExist:
+            return HttpResponse('公司不存在', status=404)
+
+        # QR Code 內容：JSON 格式包含公司資訊
+        qr_data = json.dumps({
+            'type': 'attendance_clock',
+            'company_id': company.id,
+            'company_name': company.name,
+            'latitude': company.latitude,
+            'longitude': company.longitude,
+            'radius': company.radius,
+        }, ensure_ascii=False)
+
+        # 產生 QR Code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+
+        # 產生圖片
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # 轉換為 bytes
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        # 回傳圖檔
+        response = HttpResponse(buffer.getvalue(), content_type='image/png')
+        filename = f"qrcode_{company.name}_{company.id}.png"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
 
 
 @admin.register(EmpCompanyRel)
